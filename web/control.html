@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="assets/app_icon.png">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rocket League HUD Control</title>
+<style>
+  @font-face { font-family: "Inter"; src: url("fonts/Inter.ttf") format("truetype"); font-weight: 100 900; }
+  :root { --bg: #0e1012; --panel: #171a1d; --line: #2a2f34; --text: #e8eaed; --muted: #8b939b;
+          --left: #1d5fd6; --right: #d1892b; --accent: #31c392; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Inter", system-ui, sans-serif; }
+  html, body { height: 100%; }
+  header { display: flex; align-items: center; gap: 14px; height: 54px; padding: 0 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .clock { font-variant-numeric: tabular-nums; color: var(--text); font-weight: 600; }
+  .badge { font-size: 11px; font-weight: 700; letter-spacing: .06em; padding: 3px 8px; border-radius: 4px; background: #ffcf66; color: #1a1a1a; }
+  .badge:empty { display: none; }
+  .version { font-size: 12px; color: var(--muted); }
+  .update.check { background: #252a2f; color: var(--text); border: 1px solid var(--line); font-weight: 600; }
+  .update.check:hover { filter: none; border-color: var(--muted); }
+  .update { background: var(--accent); color: #06231a; border: 0; font-weight: 700; padding: 6px 12px; }
+  .update:hover { filter: brightness(1.1); }
+  .update[disabled] { background: #2c3a35; color: var(--text); cursor: default; }
+  .update.error { background: #6b2a2a; color: #fff; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; background: transparent; padding: 6px 12px; color: var(--muted); }
+  .seg button.on { background: var(--accent); color: #06231a; font-weight: 600; }
+  /* Desktop layout: settings scroll on the left, preview / outputs / log on the right. */
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 440px; height: calc(100% - 54px); }
+  .layout > main, .layout > aside { overflow-y: auto; }
+  aside { border-left: 1px solid var(--line); padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+  .out { margin-bottom: 10px; }
+  .out > span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+  .out .row { align-items: stretch; }
+  .out code { display: flex; align-items: center; padding: 6px 8px; min-width: 0; }
+  .out button { flex: 0 0 auto; }
+  .toggle { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 13px; margin: 6px 0 10px; cursor: pointer; }
+  .toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
+  .log { height: 190px; overflow-y: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px;
+         font: 12px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+  .log .t { color: var(--muted); margin-right: 6px; }
+  .log .warn { color: #ffcf66; }
+  .log .error { color: #ff7b7b; }
+  @media (max-width: 900px) { .layout { display: block; height: auto; } aside { border-left: 0; } }
+  header h1 { margin: 0; font-size: 16px; font-weight: 700; }
+  .status { display: flex; align-items: center; gap: 8px; color: var(--muted); white-space: nowrap; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #c0392b; }
+  .dot.on { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  main { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; padding: 16px; align-content: start; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
+  section.wide { grid-column: 1 / -1; }
+  h2 { margin: 0 0 12px; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  label { display: block; margin: 10px 0 4px; color: var(--muted); font-size: 12px; }
+  input, select { width: 100%; padding: 8px 10px; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  input[type=checkbox] { width: auto; }
+  input.swatch { flex: 0 0 64px; height: 38px; padding: 3px; cursor: pointer; }
+  input[type=range] { padding: 0; border: 0; background: none; accent-color: var(--accent); }
+  .logo-adjust label span { color: var(--text); float: right; }
+  button { padding: 8px 12px; background: #252a2f; color: var(--text); border: 1px solid var(--line); border-radius: 6px; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row > * { flex: 1; }
+  .teams { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .team { border-top: 4px solid var(--left); padding-top: 8px; }
+  .team.right { border-top-color: var(--right); }
+  .team img { width: 48px; height: 48px; object-fit: contain; background: #000; border-radius: 6px; flex: 0 0 48px; }
+  .wins { display: flex; align-items: center; gap: 8px; }
+  .wins b { font-size: 22px; min-width: 28px; text-align: center; }
+  .wins button { flex: 0 0 40px; font-size: 18px; padding: 4px; }
+  .preview { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #2f3d2c url("hud/Resources/Maps/Ascent.png") center/cover; border-radius: 6px; overflow: hidden; }
+  .preview iframe { position: absolute; top: 0; left: 0; width: 1920px; height: 1080px; border: 0; transform-origin: 0 0; }
+  code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: 12px; word-break: break-all; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 4px 12px; font-size: 12px; max-height: 320px; overflow: auto; }
+  .fields div { display: flex; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--line); padding: 3px 0; cursor: copy; }
+  .fields span:last-child { color: var(--muted); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 50%; }
+  .note { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+  .select-players .pick { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; font-size: 13px; }
+  .select-players .pick span { flex: 0 0 90px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .select-players .pick select { flex: 1; min-width: 0; }
+  .select-players .pick label { display: flex; align-items: center; gap: 4px; margin: 0; flex: 0 0 auto; color: var(--muted); }
+  .cam-fonts { margin-bottom: 10px; }
+  .cam-fonts label span { float: right; color: var(--text); }
+  .cam-list { display: grid; gap: 6px; }
+  .cam-list .cam { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; }
+  .cam-list .cam .who { margin-left: auto; color: var(--muted); }
+  .cam-list .cam .who.ok { color: var(--accent); }
+  .cam-list .none { color: var(--muted); font-size: 13px; }
+  .drop { border: 2px dashed var(--line); border-radius: 8px; padding: 18px; text-align: center; color: var(--muted); cursor: pointer; }
+  .drop.over { border-color: var(--accent); color: var(--text); background: rgba(49,195,146,.06); }
+  .sponsor-list { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+  .sponsor { position: relative; width: 160px; height: 62px; background: #111 center/contain no-repeat; border: 1px solid var(--line); border-radius: 6px; }
+  .sponsor .n { position: absolute; left: 4px; top: 2px; font-size: 11px; color: var(--muted); }
+  .sponsor .tools { position: absolute; right: 2px; bottom: 2px; display: flex; gap: 2px; }
+  .sponsor .tools button { padding: 0 6px; font-size: 12px; line-height: 18px; }
+  button.primary { background: var(--accent); color: #06231a; border-color: var(--accent); font-weight: 600; }
+  .checks label { display: flex; align-items: center; gap: 10px; margin: 0; padding: 8px 0; color: var(--text); font-size: 14px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .checks input { width: 18px; height: 18px; accent-color: var(--accent); }
+  .checks .dot { width: 18px; height: 18px; box-shadow: none; display: inline-grid; place-items: center; font-size: 10px; font-weight: 700; color: #fff; }
+  .warn { color: #ffcf66; }
+  .screen-result { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+  .screen-result figure { margin: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px; }
+  .screen-result img { width: 100%; image-rendering: pixelated; background: #fff; border-radius: 3px; }
+  .screen-result figcaption { font-size: 12px; margin-top: 4px; }
+  .ok { color: var(--accent); }
+  /* The screen reader's switch: big, and red while it's reading. */
+  .read-btn { width: 100%; padding: 16px; font-size: 17px; font-weight: 700; border-radius: 8px; letter-spacing: .01em; }
+  .read-btn.reading { background: #e3475a; border-color: #e3475a; color: #fff; }
+  .read-btn.reading::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 10px; border-radius: 50%;
+                              background: #fff; vertical-align: 1px; animation: read-blink 1.2s ease-in-out infinite; }
+  .read-btn[disabled] { opacity: .5; cursor: default; }
+  @keyframes read-blink { 50% { opacity: .25; } }
+  .report { margin-top: 10px; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; font-size: 13px; }
+  .report .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+  .report .chips span { background: #252a2f; border-radius: 4px; padding: 1px 6px; font-size: 12px; }
+  details ul { margin: 6px 0 0; padding-left: 18px; }
+  .bg-video { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .bg-video label span { color: var(--text); float: right; }
+  details li { margin-bottom: 4px; }
+  @media (max-width: 600px) { .teams { grid-template-columns: 1fr; } }
+  .players { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .players .p { display: grid; grid-template-columns: 28px 1fr auto; gap: 8px; align-items: center; margin-bottom: 6px; }
+  .players .p img { width: 28px; height: 28px; border-radius: 4px; background: #000; object-fit: cover; }
+  .players .p small { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .maps .row { margin-bottom: 6px; }
+  .maps .row > span { flex: 0 0 52px; color: var(--muted); font-size: 12px; }
+  .maps input[type=radio] { flex: 0 0 auto; width: auto; accent-color: var(--accent); }
+  .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .btns button.on { background: var(--accent); color: #06231a; border-color: var(--accent); font-weight: 600; }
+  .feed { font-size: 13px; }
+  .feed code { display: inline; }
+
+  [hidden] { display: none !important; }
+  .preview { background: #33463a radial-gradient(ellipse at 50% 70%, #5c7a52, #24301f); }
+  .sponsor-list .sponsor { background-color: #0b1a3a; }
+  .names .n { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: center; margin-bottom: 6px; }
+  .names .n span { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Rocket League HUD</h1>
+  <div class="status"><span class="dot" id="dot"></span><span id="status">Connecting…</span></div>
+  <div class="seg" id="mode" role="group" aria-label="Game source">
+    <button data-mode="live">Live game</button><button data-mode="demo">Demo match</button>
+  </div>
+  <div class="seg" id="ow" hidden title="Draws the HUD in a see-through window over the whole screen, on top of Rocket League. Clicks go through it to the game. Run Rocket League Borderless or Windowed.">
+    <button id="ow-btn">Show HUD on game</button>
+    <select id="ow-screen" title="Which screen the HUD covers" style="width:auto;border:0;border-left:1px solid var(--line);border-radius:0"></select>
+  </div>
+  <div class="status" style="margin-left:auto">
+    <button id="update" class="update" hidden></button>
+    <span class="version" id="version"></span>
+    <a href="/start" style="color:var(--muted);text-decoration:none;font-size:13px">Change client</a>
+  </div>
+</header>
+<div class="layout">
+<main>
+  <section class="wide">
+    <h2>Teams</h2>
+    <div class="teams" id="teams"></div>
+  </section>
+  <section>
+    <h2>Series &amp; scorebug</h2>
+    <label>Series</label>
+    <select id="best-of"><option value="1">Best of 1</option><option value="3">Best of 3</option><option value="5">Best of 5</option>
+      <option value="7">Best of 7</option><option value="9">Best of 9</option></select>
+    <label>Event (shown with the team names)</label><input id="event" spellcheck="false">
+    <label>Stage</label><input id="stage" spellcheck="false">
+    <label>Team names on the scorebug</label>
+    <select id="scorebug"><option value="auto">Around goals, replays and kickoffs</option><option value="expanded">Always</option>
+      <option value="compact">Never (logos only)</option></select>
+  </section>
+  <section>
+    <h2>Show</h2>
+    <div class="checks">
+      <label><input type="checkbox" data-show="players"> The players and their boost</label>
+      <label><input type="checkbox" data-show="events"> What they just did (shots, saves, goals, demos)</label>
+      <label><input type="checkbox" data-show="target"> The spectated player's name and stats</label>
+      <label><input type="checkbox" data-show="boost"> The spectated player's boost dial</label>
+      <label><input type="checkbox" data-show="sponsors"> Sponsors</label>
+    </div>
+  </section>
+  <section class="wide">
+    <h2>Live data</h2>
+    <button id="reader" class="read-btn">Read Rocket League on this PC</button>
+    <div class="note" id="reader-status" style="margin:8px 0 10px"></div>
+    <div class="row" style="margin-bottom:10px">
+      <button id="enable-api" style="flex:0 0 auto">Turn on Rocket League's Stats API</button>
+      <span class="note" style="margin:0">Once per PC: sets the game's Stats API on (PacketSendRate=30, port 49123). Restart Rocket League afterwards.</span>
+    </div>
+    <div class="feed" id="feed"></div>
+    <details class="note" style="margin-top:8px">
+      <summary>Where the game is read</summary>
+      <div class="row" style="margin-top:6px"><input id="api-host" spellcheck="false" placeholder="127.0.0.1"><input id="api-port" type="number" placeholder="49123" style="flex:0 0 110px"></div>
+      <p>Rocket League's Stats API on this PC is 127.0.0.1, port 49123. When Rocket League runs on an observer PC, use <b>Send Rocket League to the HUD</b> in its Observer Client instead.</p>
+    </details>
+  </section>
+  <section class="wide">
+    <h2>Player names</h2>
+    <p class="note" style="margin-top:0">Show a different name for a player (e.g. their full tag); empty uses the in-game name.</p>
+    <div class="names" id="names"></div>
+  </section>
+  <section class="wide">
+    <h2>Sponsors</h2>
+    <div class="drop" id="sponsor-drop">Drop sponsor logos here, or click to choose (shown under the blue team, in turn)</div>
+    <input type="file" id="sponsor-file" accept="image/*" multiple hidden>
+    <div class="sponsor-list" id="sponsors"></div>
+    <label>Seconds each</label><input id="sponsor-seconds" type="number" min="2" max="60" style="max-width:120px">
+  </section>
+</main>
+<aside>
+  <section>
+    <h2>Preview</h2>
+    <div class="preview" id="preview"><iframe src="/overlay" title="Overlay preview"></iframe></div>
+  </section>
+  <section>
+    <h2>Outputs</h2>
+    <div class="out"><span>HUD overlay (OBS / vMix browser source, 1920×1080)</span>
+      <div class="row"><code id="url-local"></code><button data-copy="url-local">Copy</button></div></div>
+    <div class="out" id="lan-box" hidden><span>From another PC</span>
+      <div class="row"><code id="url-lan"></code><button data-copy="url-lan">Copy</button></div></div>
+    <label class="toggle"><input type="checkbox" id="network"> Let other PCs on the network read the HUD</label>
+  </section>
+  <section>
+    <h2>Log</h2>
+    <div class="log" id="log"></div>
+  </section>
+</aside>
+</div>
+<input type="file" id="logo-file" accept="image/*" hidden>
+<script src="update.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const showUpdate = updateButton($("update"), $("version"));
+let state = null, logAfter = 0, logoFor = null;
+
+async function post(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  const data = await r.json();
+  if (data.error) { alert(data.error); return null; }
+  apply(data);
+  return data;
+}
+const config = changes => post("/api/config", changes);
+const setIfIdle = (el, v) => { if (document.activeElement !== el && el.value !== String(v)) el.value = v; };
+
+function buildTeams() {
+  $("teams").innerHTML = ["left", "right"].map(side => `
+    <div class="team ${side}" data-side="${side}">
+      <div class="row"><img alt=""><div style="flex:1">
+        <label style="margin-top:0">${side === "left" ? "Blue team (left)" : "Orange team (right)"}</label>
+        <input data-k="name" spellcheck="false" placeholder="Team name"></div></div>
+      <div class="row"><div><label>Tricode</label><input data-k="tricode" maxlength="6" spellcheck="false"></div>
+        <div><label>Region / seed</label><input data-k="region" maxlength="10" spellcheck="false"></div>
+        <div style="flex:0 0 64px"><label>Colour</label><input type="color" class="swatch" data-k="color" style="width:64px"></div></div>
+      <label>Logo</label>
+      <div class="row"><select data-k="logo"></select><button class="up" style="flex:0 0 auto">Add…</button></div>
+      <label>Games won in the series</label>
+      <div class="wins"><button data-w="-1">−</button><b class="w">0</b><button data-w="1">+</button></div>
+    </div>`).join("");
+  for (const box of document.querySelectorAll(".team")) {
+    const side = box.dataset.side;
+    for (const el of box.querySelectorAll("[data-k]")) {
+      const send = () => config({ [side]: { [el.dataset.k]: el.value } });
+      el.addEventListener(el.tagName === "SELECT" || el.type === "color" ? "change" : "input", () => { clearTimeout(el._t); el._t = setTimeout(send, 200); });
+    }
+    box.querySelector(".up").onclick = () => { logoFor = side; $("logo-file").click(); };
+    for (const b of box.querySelectorAll("[data-w]")) b.onclick = () => {
+      const t = state.config[side], need = Math.ceil(state.config.best_of / 2);
+      config({ [side]: { wins: Math.max(0, Math.min(need, (t.wins || 0) + Number(b.dataset.w))) } });
+    };
+  }
+}
+
+function apply(s) {
+  const first = !state;
+  state = s;
+  const cfg = s.config, app = s.app, g = s.game;
+  showUpdate(app.update);
+  if (first) buildTeams();
+  for (const box of document.querySelectorAll(".team")) {
+    const t = cfg[box.dataset.side];
+    box.style.borderTopColor = t.color;
+    for (const el of box.querySelectorAll("[data-k]")) {
+      if (el.tagName === "SELECT") {
+        const opts = '<option value="">No logo</option>' + s.logos.map(l => `<option value="${l}">${l.split("/").pop()}</option>`).join("");
+        if (el.dataset.opts !== opts) { el.innerHTML = opts; el.dataset.opts = opts; }
+      }
+      setIfIdle(el, t[el.dataset.k] || (el.type === "color" ? "#000000" : ""));
+    }
+    const img = box.querySelector("img");
+    if (t.logo) img.src = t.logo; else img.removeAttribute("src");
+    box.querySelector(".w").textContent = t.wins || 0;
+  }
+  setIfIdle($("best-of"), String(cfg.best_of));
+  setIfIdle($("event"), cfg.event);
+  setIfIdle($("stage"), cfg.stage);
+  setIfIdle($("scorebug"), cfg.scorebug);
+  setIfIdle($("sponsor-seconds"), cfg.sponsor_seconds);
+  setIfIdle($("api-host"), cfg.stats_api.host);
+  setIfIdle($("api-port"), cfg.stats_api.port);
+  for (const el of document.querySelectorAll("[data-show]")) el.checked = cfg.show[el.dataset.show] !== false;
+  // Live data.
+  const st = app.stats;
+  $("reader").classList.toggle("reading", !!st.read);
+  $("reader").textContent = st.read ? "Reading Rocket League — click to stop" : "Read Rocket League on this PC";
+  $("reader-status").textContent = !st.read ? "Off. Turn on when Rocket League (spectating) runs on this PC; an observer PC can send it here instead."
+    : st.connected ? `Connected to Rocket League (${st.mode}): ${st.messages} messages, last ${st.age}s ago.`
+    : `Waiting for Rocket League's Stats API on ${st.host}:${st.port}${st.error ? ` (${st.error})` : ""}. Turn it on below (once), then restart Rocket League.`;
+  const src = { game: "Rocket League on this PC", observer: "an observer PC", demo: "the demo match" }[app.source];
+  $("feed").innerHTML = src ? `Showing the match from <b>${src}</b>: ${g.phase}, ${g.players.length} players${g.target ? `, spectating ${g.target.name}` : ""}.`
+    : "No match yet. Read Rocket League here, send it from an observer PC, or try the <b>Demo match</b>.";
+  $("dot").className = "dot" + (src ? " on" : "");
+  $("status").textContent = src ? `${g.phase} · ${Math.floor(g.clock / 60)}:${String(g.clock % 60).padStart(2, "0")}` : "No match";
+  for (const b of $("mode").children) b.classList.toggle("on", (b.dataset.mode === "demo") === app.demo);
+  // Player names.
+  const players = g.players.map(p => p.name), names = cfg.names || {};
+  const all = [...new Set([...players, ...Object.keys(names)])];
+  const key = all.join("|");
+  if ($("names").dataset.key !== key) {
+    $("names").dataset.key = key;
+    $("names").innerHTML = all.length ? all.map(n => `<div class="n"><span>${n}</span><input data-name="${n.replace(/"/g, "&quot;")}" placeholder="${n.replace(/"/g, "&quot;")}"></div>`).join("")
+      : '<p class="note">The players show here once a match is on.</p>';
+    for (const el of $("names").querySelectorAll("input")) el.oninput = () => {
+      clearTimeout(el._t);
+      el._t = setTimeout(() => {
+        const m = Object.assign({}, state.config.names);
+        if (el.value.trim()) m[el.dataset.name] = el.value.trim(); else delete m[el.dataset.name];
+        config({ names: m });
+      }, 300);
+    };
+  }
+  for (const el of $("names").querySelectorAll("input")) setIfIdle(el, names[el.dataset.name] || "");
+  // Sponsors.
+  const sp = cfg.sponsors.map((src, i) => `<div class="sponsor" style="background-image:url('${src}')"><span class="n">${i + 1}</span>
+    <div class="tools"><button data-sp="${i}" data-act="up">↑</button><button data-sp="${i}" data-act="del">✕</button></div></div>`).join("");
+  if ($("sponsors").dataset.html !== sp) {
+    $("sponsors").dataset.html = sp;
+    $("sponsors").innerHTML = sp;
+    for (const b of $("sponsors").querySelectorAll("button")) b.onclick = () => {
+      const list = state.config.sponsors.slice(), i = Number(b.dataset.sp);
+      if (b.dataset.act === "del") list.splice(i, 1); else if (i > 0) [list[i - 1], list[i]] = [list[i], list[i - 1]];
+      config({ sponsors: list });
+    };
+  }
+  // Outputs, network and the HUD window.
+  $("url-local").textContent = `http://localhost:${app.port}/overlay`;
+  $("lan-box").hidden = !app.lan_url;
+  if (app.lan_url) $("url-lan").textContent = app.lan_url + "/overlay";
+  if (document.activeElement !== $("network")) $("network").checked = app.network;
+  const ow = app.overlay_window;
+  $("ow").hidden = !ow.available;
+  if (ow.available) {
+    $("ow-btn").textContent = ow.open ? "HUD on game: on" : "Show HUD on game";
+    $("ow-btn").classList.toggle("on", !!ow.open);
+    const opts = (ow.screens || []).map((l, i) => `<option value="${i}">${l}</option>`).join("");
+    if ($("ow-screen").dataset.opts !== opts) { $("ow-screen").innerHTML = opts; $("ow-screen").dataset.opts = opts; }
+    $("ow-screen").hidden = (ow.screens || []).length < 2;
+  }
+  if (first && app.role !== "gfx") fetch("/api/role", { method: "POST", headers: { "Content-Type": "application/json" }, body: '{"role":"gfx"}' }).catch(() => {});
+}
+
+for (const b of $("mode").children) b.onclick = () => post("/api/demo", { on: b.dataset.mode === "demo" });
+$("reader").onclick = () => post("/api/reader", { enabled: !$("reader").classList.contains("reading") });
+$("enable-api").onclick = async () => { if (await post("/api/statsapi/enable", {})) alert("Rocket League's Stats API is on. Restart Rocket League for it to take effect."); };
+$("best-of").onchange = e => config({ best_of: Number(e.target.value) });
+$("scorebug").onchange = e => config({ scorebug: e.target.value });
+for (const id of ["event", "stage"]) $(id).oninput = e => { clearTimeout(e.target._t); e.target._t = setTimeout(() => config({ [id]: e.target.value }), 250); };
+$("sponsor-seconds").onchange = e => config({ sponsor_seconds: Number(e.target.value) || 8 });
+$("api-host").onchange = $("api-port").onchange = () => config({ stats_api: { host: $("api-host").value.trim() || "127.0.0.1", port: Number($("api-port").value) || 49123 } });
+for (const el of document.querySelectorAll("[data-show]")) el.onchange = () => config({ show: { [el.dataset.show]: el.checked } });
+$("network").onchange = e => post("/api/network", { on: e.target.checked });
+$("ow-btn").onclick = () => post("/api/overlay-window", { open: !state.app.overlay_window.open });
+$("ow-screen").onchange = e => post("/api/overlay-window", { open: state.app.overlay_window.open, screen: Number(e.target.value) });
+for (const b of document.querySelectorAll("[data-copy]")) b.onclick = () => navigator.clipboard.writeText($(b.dataset.copy).textContent);
+
+function readFile(file) {
+  return new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(file); });
+}
+$("logo-file").onchange = async e => {
+  const f = e.target.files[0]; e.target.value = "";
+  if (f) post("/api/logo", { name: f.name, data: await readFile(f), side: logoFor });
+};
+async function addSponsors(files) { for (const f of files) await post("/api/sponsor", { name: f.name, data: await readFile(f) }); }
+$("sponsor-drop").onclick = () => $("sponsor-file").click();
+$("sponsor-file").onchange = e => { addSponsors([...e.target.files]); e.target.value = ""; };
+$("sponsor-drop").ondragover = e => { e.preventDefault(); $("sponsor-drop").classList.add("over"); };
+$("sponsor-drop").ondragleave = () => $("sponsor-drop").classList.remove("over");
+$("sponsor-drop").ondrop = e => { e.preventDefault(); $("sponsor-drop").classList.remove("over"); addSponsors([...e.dataTransfer.files]); };
+
+function fitPreview() { const p = $("preview"); p.querySelector("iframe").style.transform = `scale(${p.clientWidth / 1920})`; }
+addEventListener("resize", fitPreview);
+async function poll() {
+  try { apply(await (await fetch("/api/state")).json()); } catch (e) {}
+  setTimeout(poll, 1000);
+}
+async function pollLog() {
+  try {
+    const d = await (await fetch(`/api/log?after=${logAfter}`)).json(), box = $("log");
+    for (const l of d.lines) {
+      logAfter = l.id;
+      const div = document.createElement("div");
+      div.className = l.level;
+      div.innerHTML = `<span class="t">${l.time}</span>`;
+      div.appendChild(document.createTextNode(l.message));
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+    }
+  } catch (e) {}
+  setTimeout(pollLog, 1500);
+}
+poll(); pollLog(); fitPreview();
+</script>
+</body>
+</html>

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="assets/app_icon.png">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rocket League HUD</title>
+<!-- First screen of the desktop app: pick the GFX controller (runs the HUD)
+     or the observer client (shows a GFX PC's HUD over the game). -->
+<style>
+  @font-face { font-family: "Inter"; src: url("fonts/Inter.ttf") format("truetype"); font-weight: 100 900; }
+  :root { --bg: #0e1012; --panel: #171a1d; --line: #2a2f34; --text: #e8eaed; --muted: #8b939b; --accent: #31c392; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Inter", system-ui, sans-serif;
+         display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 44px; }
+  h1 { margin: 0; font-size: 26px; font-weight: 600; letter-spacing: .01em; text-align: center; }
+  .choices { display: flex; gap: 40px; flex-wrap: wrap; justify-content: center; }
+  .choice { width: 260px; height: 190px; display: grid; place-items: center; background: var(--panel);
+            border: 2px solid var(--line); border-radius: 12px; color: var(--text); font: 700 22px "Inter", system-ui, sans-serif;
+            cursor: pointer; transition: transform .22s cubic-bezier(.2,.9,.3,1.2), box-shadow .22s ease, border-color .22s ease; }
+  .choice:hover, .choice:focus-visible { transform: scale(1.06); border-color: var(--accent); outline: none;
+            box-shadow: inset 0 0 28px rgba(49,195,146,.45), inset 0 0 4px rgba(49,195,146,.8); }
+  .choice:active { transform: scale(1.03); }
+  .update { padding: 6px 12px; background: var(--accent); color: #06231a; border: 0; border-radius: 6px; font: 700 13px "Inter", system-ui, sans-serif; cursor: pointer; }
+  .update:hover { filter: brightness(1.1); }
+  .update[disabled] { background: #2c3a35; color: var(--text); cursor: default; }
+  .update.error { background: #6b2a2a; color: #fff; }
+  .version { font-size: 12px; color: var(--muted); }
+  .update.check { background: #252a2f; color: var(--text); border: 1px solid var(--line); font-weight: 600; }
+  .update.check:hover { filter: none; border-color: var(--muted); }
+  /* Lower third: the update button, smaller than the client choices. */
+  .updates { position: fixed; left: 0; right: 0; bottom: 9%; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .updates .update { padding: 8px 18px; font-size: 14px; border-radius: 8px; transition: transform .18s ease; }
+  .updates .update:not([disabled]):hover { transform: scale(1.04); }
+</style>
+</head>
+<body>
+  <h1>Please select the appropriate client</h1>
+  <div class="choices">
+    <button class="choice" data-role="gfx">GFX Controller</button>
+    <button class="choice" data-role="observer">Observer Client</button>
+  </div>
+  <div class="updates">
+    <button id="update" class="update" hidden></button>
+    <span class="version" id="version"></span>
+  </div>
+<script src="update.js"></script>
+<script>
+// Version and update, as in the GFX Controller's top bar.
+const showUpdate = updateButton(document.getElementById("update"), document.getElementById("version"));
+async function poll() {
+  try { showUpdate((await (await fetch("/api/state")).json()).app.update); } catch (e) {}
+  setTimeout(poll, 2000);
+}
+poll();
+
+// Back on this screen: neither client is running.
+fetch("/api/role", { method: "POST", headers: { "Content-Type": "application/json" }, body: '{"role":null}' }).catch(() => {});
+for (const b of document.querySelectorAll(".choice")) {
+  b.onclick = async () => {
+    const role = b.dataset.role;
+    try {
+      await fetch("/api/role", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role }) });
+    } catch (e) {}
+    location.href = role === "gfx" ? "/control" : "/observer";
+  };
+}
+</script>
+</body>
+</html>

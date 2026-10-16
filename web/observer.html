@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="assets/app_icon.png">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rocket League HUD Observer</title>
+<!-- Observer client: shows the HUD from the GFX PC over the game on this PC. -->
+<style>
+  @font-face { font-family: "Inter"; src: url("fonts/Inter.ttf") format("truetype"); font-weight: 100 900; }
+  :root { --bg: #0e1012; --panel: #171a1d; --line: #2a2f34; --text: #e8eaed; --muted: #8b939b; --accent: #31c392; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Inter", system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 14px; height: 54px; padding: 0 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { margin: 0; font-size: 16px; font-weight: 700; }
+  header span { color: var(--muted); }
+  header .right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+  header a { color: var(--muted); text-decoration: none; font-size: 13px; }
+  header a:hover { color: var(--text); }
+  main { height: calc(100% - 54px); display: grid; place-items: center; padding: 16px; }
+  section { width: min(560px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 24px; }
+  label { display: block; margin: 0 0 6px; color: var(--muted); font-size: 12px; }
+  input, select { width: 100%; padding: 10px 12px; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  .status { min-height: 20px; margin: 8px 0 20px; font-size: 12px; color: var(--muted); }
+  .status.ok { color: var(--accent); }
+  .status.bad { color: #ffcf66; }
+  .row { display: flex; gap: 10px; }
+  .row > :first-child { flex: 1; }
+  #show, #spectate, #connect { width: 100%; padding: 14px; font: 700 16px "Inter", system-ui, sans-serif; border-radius: 8px; cursor: pointer;
+          background: #252a2f; color: var(--text); border: 1px solid var(--line); transition: background .15s, color .15s; }
+  .row > #spectate { flex: 1; }
+  #connect { width: auto; padding: 0 16px; font-size: 14px; border-radius: 6px; }
+  #show:hover, #spectate:hover, #connect:hover { border-color: var(--muted); }
+  #show[disabled], #spectate[disabled] { opacity: .5; cursor: default; }
+  #show.on { background: var(--accent); color: #06231a; border-color: var(--accent); }
+  /* Sending the game: red while it's being read. */
+  #spectate.on { background: #e3475a; color: #fff; border-color: #e3475a; }
+  #enable-api { margin-top: 10px; padding: 8px 12px; background: #252a2f; color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+                font: 600 13px "Inter", system-ui, sans-serif; cursor: pointer; }
+  #enable-api:hover { border-color: var(--muted); }
+  #screen { width: auto; }
+  #connect[disabled] { opacity: .6; cursor: progress; }
+  .found { display: grid; gap: 6px; margin-top: 10px; }
+  .found button { text-align: left; padding: 10px 12px; background: var(--bg); color: var(--text); border: 1px solid var(--line);
+                  border-radius: 6px; font: inherit; cursor: pointer; }
+  .found button:hover { border-color: var(--accent); }
+  .found button small { color: var(--muted); margin-left: 8px; }
+  .note { color: var(--muted); font-size: 12px; margin: 14px 0 0; }
+  .update { padding: 6px 12px; background: var(--accent); color: #06231a; border: 0; border-radius: 6px; font: 700 13px "Inter", system-ui, sans-serif; cursor: pointer; }
+  .update:hover { filter: brightness(1.1); }
+  .update[disabled] { background: #2c3a35; color: var(--text); cursor: default; }
+  .update.error { background: #6b2a2a; color: #fff; }
+  .version { font-size: 12px; color: var(--muted); }
+  .update.check { background: #252a2f; color: var(--text); border: 1px solid var(--line); font-weight: 600; }
+  .update.check:hover { filter: none; border-color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Rocket League HUD</h1><span>Observer Client</span>
+  <div class="right">
+    <button id="update" class="update" hidden></button>
+    <span class="version" id="version"></span>
+    <a href="/start" id="switch">Change client</a>
+  </div>
+</header>
+<main>
+  <section>
+    <label for="url">GFX PC address</label>
+    <div class="row">
+      <input id="url" spellcheck="false" placeholder="http://192.168.2.40:8781/overlay">
+      <button id="connect" style="flex:0 0 auto">Connect to HUD</button>
+    </div>
+    <div class="found" id="found" hidden></div>
+    <div class="status" id="status"></div>
+    <div class="row">
+      <button id="show">Show HUD on game</button>
+      <button id="spectate" title="Reads Rocket League on this PC (its Stats API) and sends the match to the GFX PC">Send Rocket League to the HUD</button>
+      <select id="screen" title="Which screen the HUD covers" hidden></select>
+    </div>
+    <p class="note" id="spectate-status" style="margin-top:16px"></p>
+    <button id="enable-api" title="Sets PacketSendRate in Rocket League's Stats API settings on this PC">Turn on Rocket League's Stats API on this PC</button>
+    <p class="note" id="note"></p>
+  </section>
+</main>
+<script src="update.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const showUpdate = updateButton($("update"), $("version"));
+let state = null, checkTimer = null, checking = 0;
+
+async function post(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await r.json();
+  if (data.error) alert(data.error); else apply(data);
+}
+
+function apply(s) {
+  const first = !state;
+  state = s;
+  showUpdate(s.app.update);
+  if (first || document.activeElement !== $("url")) $("url").value = s.config.observer_url || "";
+  const st = s.app.stats;
+  $("spectate").classList.toggle("on", !!st.read);
+  $("spectate").textContent = st.read ? "Sending Rocket League — click to stop" : "Send Rocket League to the HUD";
+  $("spectate-status").textContent = !st.read
+    ? "When Rocket League (spectating) runs on this PC, send its match to the GFX PC's HUD."
+    : st.connected ? `Connected to Rocket League (${st.messages} messages, last ${st.age}s ago); sending to the GFX PC.`
+    : `Waiting for Rocket League's Stats API on port ${st.port}. Turn it on below (once), then restart Rocket League.`;
+  const ow = s.app.overlay_window;
+  $("show").disabled = !ow.available;
+  $("show").classList.toggle("on", !!ow.open);
+  $("show").textContent = ow.open ? "HUD on game: on" : "Show HUD on game";
+  $("note").textContent = ow.available
+    ? "Run Rocket League in Borderless or Windowed mode. On the GFX PC, tick \"Let other PCs on the network read the HUD\"."
+    : "The HUD window needs the Windows desktop app.";
+  const opts = (ow.screens || []).map((label, i) => `<option value="${i}">${label}</option>`).join("");
+  if ($("screen").dataset.opts !== opts) { $("screen").innerHTML = opts; $("screen").dataset.opts = opts; }
+  $("screen").hidden = (ow.screens || []).length < 2;
+  if (document.activeElement !== $("screen")) $("screen").value = String(ow.screen || 0);
+  if (first) {
+    if ($("url").value.trim()) check(); else findHud();
+    if (s.app.role !== "observer") fetch("/api/role", { method: "POST", headers: { "Content-Type": "application/json" }, body: '{"role":"observer"}' }).catch(() => {});
+  }
+}
+
+// Can this PC reach the GFX PC's HUD?
+async function check() {
+  const url = $("url").value.trim();
+  const id = ++checking;
+  if (!url) { $("status").className = "status"; $("status").textContent = "Enter the address shown under Outputs > From another PC on the GFX PC."; return; }
+  $("status").className = "status"; $("status").textContent = "Connecting…";
+  try {
+    const r = await (await fetch(`/api/observer/check?url=${encodeURIComponent(url)}`)).json();
+    if (id !== checking) return;
+    $("status").className = "status " + (r.ok ? "ok" : "bad");
+    $("status").textContent = r.ok ? `Connected to the GFX PC (${r.overlay})` : r.error;
+  } catch (e) {
+    if (id === checking) { $("status").className = "status bad"; $("status").textContent = "Couldn't check the address"; }
+  }
+}
+
+function useHud(url) {
+  $("url").value = url;
+  $("found").hidden = true;
+  post("/api/config", { observer_url: url });
+  check();
+}
+
+// Connect to HUD: look on the network for a PC running the HUD; if there's
+// none, ask for its address.
+async function findHud() {
+  const button = $("connect");
+  button.disabled = true;
+  button.textContent = "Searching…";
+  $("found").hidden = true;
+  $("status").className = "status";
+  $("status").textContent = "Looking for the HUD on the network…";
+  let huds = [];
+  try { huds = (await (await fetch("/api/observer/find")).json()).huds || []; } catch (e) {}
+  button.disabled = false;
+  button.textContent = "Connect to HUD";
+  if (huds.length === 1) return useHud(huds[0].overlay);
+  if (huds.length > 1) {
+    $("status").textContent = "More than one PC is running the HUD. Pick the GFX PC:";
+    $("found").innerHTML = "";
+    for (const h of huds) {
+      const b = document.createElement("button");
+      b.innerHTML = `${h.ip}<small>${h.teams || ""}</small>`;
+      b.onclick = () => useHud(h.overlay);
+      $("found").appendChild(b);
+    }
+    $("found").hidden = false;
+    return;
+  }
+  const typed = prompt("No PC running the HUD was found on the network.\n\n" +
+    "Enter the GFX PC's address (shown on the GFX PC under Outputs > From another PC). " +
+    "On the GFX PC, \"Let other PCs on the network read the HUD\" must be ticked.", $("url").value.trim() || "http://");
+  if (typed && typed.trim() && typed.trim() !== "http://") useHud(typed.trim());
+  else check();
+}
+
+$("connect").onclick = findHud;
+$("spectate").onclick = () => {
+  if (!state.app.stats.read && !$("url").value.trim()) return alert("Enter the GFX PC address and connect to the HUD first.");
+  post("/api/reader", { enabled: !state.app.stats.read });
+};
+$("enable-api").onclick = async () => {
+  const r = await fetch("/api/statsapi/enable", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  const d = await r.json();
+  if (d.error) alert(d.error);
+  else alert("Rocket League's Stats API is on. Restart Rocket League for it to take effect.");
+};
+$("url").addEventListener("input", () => { clearTimeout(checkTimer); checkTimer = setTimeout(check, 600); });
+$("url").addEventListener("change", () => post("/api/config", { observer_url: $("url").value.trim() }));
+$("show").onclick = () => {
+  const open = !state.app.overlay_window.open;
+  post("/api/overlay-window", { open, url: $("url").value.trim() });
+};
+$("screen").onchange = e => post("/api/overlay-window",
+  { open: state.app.overlay_window.open, screen: Number(e.target.value), url: $("url").value.trim() });
+
+async function poll() {
+  try { apply(await (await fetch("/api/state")).json()); } catch (e) {}
+  setTimeout(poll, 1500);
+}
+poll();
+setInterval(check, 10000);
+</script>
+</body>
+</html>
