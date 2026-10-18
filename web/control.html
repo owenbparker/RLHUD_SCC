@@ -136,6 +136,7 @@
   .names .n { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: center; margin-bottom: 6px; }
   .names .n span { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
+<link rel="stylesheet" href="shell.css">
 </head>
 <body>
 <header>
@@ -157,11 +158,11 @@
 </header>
 <div class="layout">
 <main>
-  <section class="wide">
+  <section class="wide" data-page="teams">
     <h2>Teams</h2>
     <div class="teams" id="teams"></div>
   </section>
-  <section>
+  <section data-page="tournament">
     <h2>Series &amp; scorebug</h2>
     <label>Series</label>
     <select id="best-of"><option value="1">Best of 1</option><option value="3">Best of 3</option><option value="5">Best of 5</option>
@@ -172,7 +173,7 @@
     <select id="scorebug"><option value="auto">Around goals, replays and kickoffs</option><option value="expanded">Always</option>
       <option value="compact">Never (logos only)</option></select>
   </section>
-  <section>
+  <section data-page="editor">
     <h2>Show</h2>
     <div class="checks">
       <label><input type="checkbox" data-show="players"> The players and their boost</label>
@@ -182,7 +183,7 @@
       <label><input type="checkbox" data-show="sponsors"> Sponsors</label>
     </div>
   </section>
-  <section class="wide">
+  <section class="wide" data-page="live overview">
     <h2>Live data</h2>
     <button id="reader" class="read-btn">Read Rocket League on this PC</button>
     <div class="note" id="reader-status" style="margin:8px 0 10px"></div>
@@ -197,12 +198,12 @@
       <p>Rocket League's Stats API on this PC is 127.0.0.1, port 49123. When Rocket League runs on an observer PC, use <b>Send Rocket League to the HUD</b> in its Observer Client instead.</p>
     </details>
   </section>
-  <section class="wide">
+  <section class="wide" data-page="teams">
     <h2>Player names</h2>
     <p class="note" style="margin-top:0">Show a different name for a player (e.g. their full tag); empty uses the in-game name.</p>
     <div class="names" id="names"></div>
   </section>
-  <section class="wide">
+  <section class="wide" data-page="tournament">
     <h2>Sponsors</h2>
     <div class="drop" id="sponsor-drop">Drop sponsor logos here, or click to choose (shown under the blue team, in turn)</div>
     <input type="file" id="sponsor-file" accept="image/*" multiple hidden>
@@ -211,11 +212,11 @@
   </section>
 </main>
 <aside>
-  <section>
+  <section data-page="editor live">
     <h2>Preview</h2>
     <div class="preview" id="preview"><iframe src="/overlay" title="Overlay preview"></iframe></div>
   </section>
-  <section>
+  <section data-page="overview">
     <h2>Outputs</h2>
     <div class="out"><span>HUD overlay (OBS / vMix browser source, 1920×1080)</span>
       <div class="row"><code id="url-local"></code><button data-copy="url-local">Copy</button></div></div>
@@ -223,13 +224,15 @@
       <div class="row"><code id="url-lan"></code><button data-copy="url-lan">Copy</button></div></div>
     <label class="toggle"><input type="checkbox" id="network"> Let other PCs on the network read the HUD</label>
   </section>
-  <section>
+  <section data-page="overview">
     <h2>Log</h2>
     <div class="log" id="log"></div>
   </section>
 </aside>
 </div>
 <input type="file" id="logo-file" accept="image/*" hidden>
+<script>window.SHELL = {"app": "Rocket League HUD", "logo": "assets/logo.png", "pages": [{"id": "overview", "label": "Overview"}, {"id": "editor", "label": "HUD Editor"}, {"id": "teams", "label": "Players & Teams", "group": "Event setup"}, {"id": "tournament", "label": "Tournament", "group": "Event setup"}, {"id": "live", "label": "Live Game", "group": "Live game"}]};</script>
+<script src="shell.js"></script>
 <script src="update.js"></script>
 <script>
 const $ = id => document.getElementById(id);
