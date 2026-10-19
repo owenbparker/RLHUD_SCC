@@ -45,6 +45,8 @@ DEFAULTS = {
     "sponsors": [],
     "sponsor_seconds": 8,
     "show": {"players": True, "sponsors": True, "target": True, "boost": True, "events": True},
+    # The SCC GFX Engine this HUD sends its game and series to (see rlhud/enginelink.py).
+    "gfx_engine": {"url": "", "name": "", "connected": False},
 }
 
 _lock = threading.Lock()

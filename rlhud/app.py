@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from . import statsapi
 from .config import DATA_DIR, LOGO_DIR, SPONSOR_DIR, WEB_DIR, web_file
 from .demo import DemoMatch
+from .enginelink import EngineLink, save_logo_bytes
 from .game import GameState
 from .log import log, since
 from .updater import Updater, clean_up_old_update
@@ -45,6 +46,10 @@ class HudApp:
         self._outbox, self._out_lock = [], threading.Lock()
         self._stop = threading.Event()
         self._cond = threading.Condition()
+        # The SCC GFX Engine: the match and series go to it; its teams can come here.
+        self.engine = EngineLink("Rocket League HUD", "rl", self._engine_snapshot, self._engine_apply_global,
+                                 load=lambda: self.config.get().get("gfx_engine"),
+                                 save=lambda d: self.config.update({"gfx_engine": d}), log=log)
         if demo:
             self.set_demo(True)
 
@@ -162,6 +167,70 @@ class HudApp:
         keep = ("left", "right", "best_of", "event", "stage", "scorebug", "names", "sponsors", "sponsor_seconds", "show")
         return {"game": self.state.snapshot(), "config": {k: cfg[k] for k in keep}}
 
+    # --- the SCC GFX Engine -------------------------------------------------------------
+
+    def _engine_snapshot(self):
+        """What the GFX Engine gets: the match as flat fields, and the series."""
+        cfg = self.config.get()
+        game = self.state.snapshot()
+        names = cfg.get("names") or {}
+        f = {}
+        for i, side in enumerate(("left", "right")):
+            team = cfg[side]
+            f[f"{side}_name"] = team["name"]
+            f[f"{side}_short"] = team["tricode"]
+            f[f"{side}_goals"] = game["teams"][i]["score"]
+            f[f"{side}_series"] = int(team["wins"] or 0)
+            players = [p for p in game["players"] if p["team"] == i]
+            for n, p in enumerate(players[:4], 1):
+                key = f"{side}_p{n}"
+                f[key + "_name"] = names.get(p["name"]) or p["name"]
+                for stat in ("goals", "assists", "saves", "shots", "score", "demos"):
+                    f[f"{key}_{stat}"] = p[stat]
+                f[key + "_boost"] = p["boost"] if p["boost"] is not None else ""
+        clock = int(game["clock"] or 0)
+        f["clock"] = ("+" if game["overtime"] else "") + f"{clock // 60}:{clock % 60:02d}"
+        f["clock_seconds"] = clock
+        f["overtime"] = bool(game["overtime"])
+        f["phase"] = game["phase"]
+        f["best_of"] = int(cfg.get("best_of") or 7)
+        f["event"] = cfg.get("event") or ""
+        f["stage"] = cfg.get("stage") or ""
+        target = game.get("target") or {}
+        f["target"] = names.get(target.get("name")) or target.get("name") or ""
+        f["ball_speed"] = game["ball_speed"]
+        f["arena"] = game["arena"]
+        series = {side: {"name": cfg[side]["name"], "short": cfg[side]["tricode"], "score": int(cfg[side]["wins"] or 0),
+                         "color": cfg[side]["color"]} for side in ("left", "right")}
+        series["best_of"] = f["best_of"]
+        return {"fields": f, "series": series}
+
+    def _engine_apply_global(self, g, fetch):
+        """The GFX Engine's teams (names, short names, logos) into the HUD."""
+        changes, done = {}, []
+        for side in ("left", "right"):
+            t = g.get(side) or {}
+            team = {}
+            if t.get("name"):
+                team["name"] = t["name"]
+            if t.get("short"):
+                team["tricode"] = t["short"][:6]
+            if t.get("logo_url"):
+                try:
+                    blob = fetch(t["logo_url"])
+                    name = save_logo_bytes(LOGO_DIR, f"engine-{t.get('short') or t.get('name') or side}", blob)
+                    team["logo"] = f"logos/{name}"
+                except Exception as e:
+                    log(f"Couldn't fetch the {side} logo from the GFX Engine: {e}", "warn")
+            if team:
+                changes[side] = team
+                done.append(f"{side}: {team.get('name') or team.get('tricode') or 'logo'}")
+        if not changes:
+            raise ValueError("The engine's Global configuration has no team names or logos yet")
+        self.config.update(changes)
+        self.changed()
+        return ", ".join(done)
+
     def wait(self, timeout):
         with self._cond:
             self._cond.wait(timeout)
@@ -173,6 +242,7 @@ class HudApp:
     def stop(self):
         self._stop.set()
         self.stats.stop()
+        self.engine.stop()
         if self.demo:
             self.demo.stop()
         if self.server:
@@ -322,6 +392,8 @@ def make_handler(app):
                 return self._json(app.snapshot())
             if path == "/api/stream":
                 return self._stream()
+            if path == "/api/engine":
+                return self._json(app.engine.status())
             if path == "/api/log":
                 return self._json({"lines": since(int((parse_qs(url.query).get("after") or ["0"])[0]))})
             if path in ("/api/observer/check", "/api/observer/find"):
@@ -347,6 +419,12 @@ def make_handler(app):
                 if path == "/api/ingest":
                     app.ingest(body.get("messages") or [])
                     return self._json({"ok": True})
+                if path.startswith("/api/engine/"):
+                    # Connect to GFX Engine (see enginelink.py).
+                    reply = app.engine.handle("POST", path, body)
+                    if reply is None:
+                        return self._json({"error": "not found"}, 404)
+                    return self._json(reply)
                 if path == "/api/config":
                     app.config.update(body)
                     if "stats_api" in body:

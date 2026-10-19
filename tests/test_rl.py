@@ -159,7 +159,7 @@ class ServerTests(unittest.TestCase):
                     req = urllib.request.Request(base + path, json.dumps(body).encode(), {"Content-Type": "application/json"})
                     return json.loads(urllib.request.urlopen(req, timeout=5).read())
 
-                for path in ("/start", "/control", "/observer", "/overlay", "/update.js", "/fonts/Saira-ExtraBoldItalic.ttf"):
+                for path in ("/start", "/control", "/observer", "/overlay", "/update.js", "/enginelink.js", "/fonts/Saira-ExtraBoldItalic.ttf"):
                     with urllib.request.urlopen(base + path, timeout=5) as r:
                         self.assertEqual(r.status, 200, path)
                         r.read()
@@ -186,8 +186,93 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(len(state["game"]["players"]), 6)
                 with self.assertRaises(urllib.error.HTTPError):
                     post("/api/role", {"role": "nobody"})
+                engine = json.loads(urllib.request.urlopen(base + "/api/engine", timeout=5).read())
+                self.assertEqual((engine["source"], engine["connected"]), ("Rocket League HUD", False))
+                with self.assertRaises(urllib.error.HTTPError) as err:
+                    post("/api/engine/nothing", {})
+                self.assertEqual(err.exception.code, 404)
+                with self.assertRaises(urllib.error.HTTPError) as err:
+                    post("/api/engine/use-global", {})
+                self.assertEqual(err.exception.code, 400)
             finally:
                 app.stop()
+
+
+class EngineLinkTests(unittest.TestCase):
+    def test_sends_to_and_takes_from_a_gfx_engine(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from unittest import mock
+        from rlhud import app as app_module
+        from rlhud.app import HudApp
+
+        ingests = []
+        logo = b"\x89PNG\r\n\x1a\n" + b"0" * 32
+        engine_port = 8798
+
+        class Engine(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def _send(self, body, ctype="application/json"):
+                body = body if isinstance(body, bytes) else json.dumps(body).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                if self.path == "/api/hello":
+                    return self._send({"app": "scc-gfx-engine", "name": "Test"})
+                if self.path == "/api/global":
+                    base = f"http://127.0.0.1:{engine_port}"
+                    return self._send({"global": {"left": {"name": "KARMINE CORP", "short": "KC", "logo_url": base + "/logo.png"},
+                                                  "right": {"name": "VITALITY", "short": "VIT"}}})
+                if self.path == "/logo.png":
+                    return self._send(logo, "image/png")
+                self.send_error(404)
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                if self.path == "/api/ingest":
+                    ingests.append(body)
+                    return self._send({"ok": True, "global": {}})
+                self.send_error(404)
+
+        server = ThreadingHTTPServer(("127.0.0.1", engine_port), Engine)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        with tempfile.TemporaryDirectory() as tmp:
+            logo_dir = os.path.join(tmp, "logos")
+            cfg = Config(os.path.join(tmp, "config.json"))
+            with mock.patch.object(app_module, "LOGO_DIR", logo_dir):
+                app = HudApp(cfg)
+                try:
+                    app.state.apply("UpdateState", UPDATE["Data"])
+                    app.engine.connect(f"http://127.0.0.1:{engine_port}")
+                    deadline = time.time() + 8
+                    while time.time() < deadline and not any(b.get("series") and b.get("fields") for b in ingests):
+                        time.sleep(0.05)
+                    sent = [b for b in ingests if b.get("series") and b.get("fields")][0]
+                    self.assertEqual((sent["source"], sent["game"]), ("Rocket League HUD", "rl"))
+                    self.assertEqual(sent["series"]["left"], {"name": "TEAM FALCONS", "short": "FLCN", "score": 2, "color": "#1d5fd6"})
+                    self.assertEqual(sent["series"]["best_of"], 7)
+                    self.assertEqual(sent["fields"]["left_goals"], 4)
+                    self.assertEqual(sent["fields"]["right_p1_name"], "ATOMIC")
+                    self.assertEqual(sent["fields"]["clock"], "1:14")
+                    self.assertTrue(cfg.get()["gfx_engine"]["connected"])
+
+                    reply = app.engine.use_global()
+                    self.assertIn("KARMINE CORP", reply["summary"])
+                    c = cfg.get()
+                    self.assertEqual((c["left"]["name"], c["left"]["tricode"]), ("KARMINE CORP", "KC"))
+                    self.assertEqual((c["right"]["name"], c["right"]["tricode"]), ("VITALITY", "VIT"))
+                    self.assertEqual(c["left"]["logo"], "logos/engine-KC.png")
+                    with open(os.path.join(logo_dir, "engine-KC.png"), "rb") as f:
+                        self.assertEqual(f.read(), logo)
+                finally:
+                    app.stop()
+                    server.shutdown()
+                    server.server_close()
 
 
 if __name__ == "__main__":
