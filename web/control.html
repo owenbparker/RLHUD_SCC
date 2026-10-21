@@ -183,6 +183,18 @@
       <label><input type="checkbox" data-show="sponsors"> Sponsors</label>
     </div>
   </section>
+  <section class="wide" data-page="teams">
+    <h2>Players</h2>
+    <p class="note" style="margin-top:0">Links each player in the game to their player in the team's roster on GFX Engine (Teams &gt; Team members), by their in-game name. Linked players show on the engine's graphics with their player name, headshot and flag.</p>
+    <div class="link-teams">
+      <div class="link-team left" id="links-left"></div>
+      <div class="link-team right" id="links-right"></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+      <button type="button" id="links-refresh">Refresh</button>
+      <span class="note" id="links-note" style="margin:0"></span>
+    </div>
+  </section>
   <section class="wide" data-page="live overview">
     <h2>Live data</h2>
     <button id="reader" class="read-btn">Read Rocket League on this PC</button>
@@ -416,6 +428,64 @@ async function pollLog() {
   setTimeout(pollLog, 1500);
 }
 poll(); pollLog(); fitPreview();
+</script>
+<style>
+  .link-teams { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 600px) { .link-teams { grid-template-columns: 1fr; } }
+  .link-team { border-top: 4px solid var(--left); padding-top: 8px; }
+  .link-team.right { border-top-color: var(--right); }
+  .link-team h3 { margin: 0 0 6px; font-size: 13px; }
+  .link-row { display: grid; grid-template-columns: minmax(0, 1fr) auto 190px; gap: 10px; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--line); }
+  .link-row b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .link-row select { padding: 5px 8px; margin: 0; }
+  .linked { color: #3ecf6e; font-size: 12px; }
+  .unlinked { color: #ff5a5a; font-size: 12px; }
+</style>
+<script>
+// Players: "Save IGN to player" links each in-game player to their player in
+// the GFX Engine's team roster (by in-game name). Same as the League HUD's.
+(function playerLinks() {
+  const byId = id => document.getElementById(id);
+  const esc = t => String(t == null ? "" : t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  const call = (path, body) => fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) }).then(r => r.json());
+  function render(data) {
+    for (const side of ["left", "right"]) {
+      const box = byId(`links-${side}`), s = data && data.sides && data.sides[side];
+      if (!s) { box.innerHTML = ""; continue; }
+      const members = s.members.map(m => `<option value="${m.index}">${esc(m.name || m.ign || `Player ${m.index + 1}`)}</option>`).join("");
+      const rows = s.players.map(p => {
+        const m = p.linked === null ? null : s.members[p.linked];
+        return `<div class="link-row"><b title="${esc(p.ign)}">${esc(p.ign)}</b>` +
+          (m ? `<span class="linked">linked: ${esc(m.name || m.ign)}</span>` : `<span class="unlinked">unlinked</span>`) +
+          `<select data-side="${side}" data-ign="${esc(p.ign)}"${s.members.length ? "" : " disabled"}><option value="">Save IGN to player ▾</option>${members}</select></div>`;
+      }).join("");
+      box.innerHTML = `<h3>${esc(s.team || side + " team")}</h3>` +
+        (!s.found ? `<p class="note">No team called "${esc(s.team)}" in GFX Engine's Teams, so there's no roster to link to.</p>`
+          : !s.members.length ? `<p class="note">${esc(s.team)} has no team members in GFX Engine yet (Teams &gt; Team members).</p>` : "") +
+        (rows || `<p class="note">No players yet: they show once a game is on.</p>`);
+    }
+    for (const sel of document.querySelectorAll(".link-row select")) sel.addEventListener("change", async () => {
+      if (sel.value === "") return;
+      const data = await call("/api/engine/link", { side: sel.dataset.side, player: Number(sel.value), ign: sel.dataset.ign });
+      if (data.error) { alert(data.error); sel.value = ""; return; }
+      byId("links-note").textContent = `Saved ${sel.dataset.ign}.`;
+      render(data);
+    });
+  }
+  async function refresh(force) {
+    const box = byId("links-left").closest("section");
+    if (!force && (document.hidden || !box.offsetParent || box.contains(document.activeElement))) return;
+    try {
+      const data = await call("/api/engine/roster");
+      if (data.error) { render(null); byId("links-note").textContent = data.error.startsWith("Connect") ? "Connect to a GFX Engine (GFX Engine page) to link players." : data.error; return; }
+      if (!byId("links-note").textContent.startsWith("Saved")) byId("links-note").textContent = "";
+      render(data);
+    } catch (e) { /* the HUD is restarting */ }
+  }
+  byId("links-refresh").addEventListener("click", () => { byId("links-note").textContent = ""; refresh(true); });
+  setInterval(refresh, 4000);
+  refresh();
+})();
 </script>
 </body>
 </html>

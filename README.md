@@ -36,6 +36,12 @@ or on its own with **SCC-RL-HUD-Setup.exe** from the
 3. Set the teams, the series and the scorebug's text in the control panel.
    **Demo match** plays a made-up 3v3 to try it all without the game.
 
+## GFX Engine
+
+On the **GFX Engine** page, connect to an SCC GFX Engine on the network: the HUD sends it the match. **Use Global Information** takes the engine's teams (names, tricodes, logos) and its sponsors (into the sponsors under the blue team's boost list, with their seconds each).
+
+**Players & Teams > Players** lists each player in the game, **linked** (green) or **unlinked** (red) to their player in the team's roster on the engine (Teams > Team members), with **Save IGN to player**: pick their roster player and the in-game name is saved as their In-game ID on the engine, so the engine's graphics show them with their player name, headshot and flag.
+
 ## From source
 
 ```

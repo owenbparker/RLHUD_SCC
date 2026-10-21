@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from . import statsapi
 from .config import DATA_DIR, LOGO_DIR, SPONSOR_DIR, WEB_DIR, web_file
 from .demo import DemoMatch
-from .enginelink import EngineLink, save_logo_bytes
+from .enginelink import EngineLink, save_logo_bytes, save_sponsors
 from .game import GameState
 from .log import log, since
 from .updater import Updater, clean_up_old_update
@@ -185,6 +185,7 @@ class HudApp:
             for n, p in enumerate(players[:4], 1):
                 key = f"{side}_p{n}"
                 f[key + "_name"] = names.get(p["name"]) or p["name"]
+                f[key + "_ign"] = p["name"]   # (the game's own name: what GFX Engine links its roster by)
                 for stat in ("goals", "assists", "saves", "shots", "score", "demos"):
                     f[f"{key}_{stat}"] = p[stat]
                 f[key + "_boost"] = p["boost"] if p["boost"] is not None else ""
@@ -206,7 +207,7 @@ class HudApp:
         return {"fields": f, "series": series}
 
     def _engine_apply_global(self, g, fetch):
-        """The GFX Engine's teams (names, short names, logos) into the HUD."""
+        """The GFX Engine's teams (names, short names, logos) and sponsors into the HUD."""
         changes, done = {}, []
         for side in ("left", "right"):
             t = g.get(side) or {}
@@ -225,8 +226,15 @@ class HudApp:
             if team:
                 changes[side] = team
                 done.append(f"{side}: {team.get('name') or team.get('tricode') or 'logo'}")
+        # Its sponsors, in the HUD's sponsor rotation.
+        sponsors, secs = save_sponsors(g, fetch, SPONSOR_DIR, "sponsors/", log)
+        if sponsors:
+            changes["sponsors"] = sponsors
+            if secs:
+                changes["sponsor_seconds"] = secs
+            done.append(f"{len(sponsors)} sponsor{'s' if len(sponsors) != 1 else ''}")
         if not changes:
-            raise ValueError("The engine's Global configuration has no team names or logos yet")
+            raise ValueError("The engine's Global configuration has no team names, logos or sponsors yet")
         self.config.update(changes)
         self.changed()
         return ", ".join(done)
