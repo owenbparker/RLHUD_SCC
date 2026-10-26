@@ -179,6 +179,11 @@ class ServerTests(unittest.TestCase):
                 post("/api/config", {"left": {"name": "SAINTS"}, "names": {"ATOMIC": "Atomic!"}})
                 self.assertEqual(cfg.get()["left"]["name"], "SAINTS")
                 self.assertEqual(cfg.get()["left"]["tricode"], "FLCN")
+                c = post("/api/swap", {})["config"]
+                self.assertEqual((c["left"]["name"], c["left"]["wins"], c["right"]["name"], c["right"]["tricode"]),
+                                 ("NRG", 1, "SAINTS", "FLCN"))
+                self.assertEqual((c["left"]["color"], c["right"]["color"]), ("#1d5fd6", "#d1892b"))   # blue stays blue
+                post("/api/swap", {})
                 post("/api/demo", {"on": True})
                 time.sleep(0.5)
                 state = json.loads(urllib.request.urlopen(base + "/api/state", timeout=5).read())

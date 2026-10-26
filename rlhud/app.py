@@ -243,6 +243,15 @@ class HudApp:
         with self._cond:
             self._cond.wait(timeout)
 
+    def swap_sides(self):
+        """The teams change sides (blue and orange): their names, tricodes,
+        regions, logos and games won. The colours stay with the side."""
+        cfg = self.config.get()
+        keep = lambda side: {"color": cfg[side].get("color")}
+        self.config.update({"left": dict(cfg["right"], **keep("left")), "right": dict(cfg["left"], **keep("right"))})
+        log(f"Sides swapped: {cfg['right']['name'] or 'orange team'} on blue")
+        self.changed()
+
     def changed(self):
         with self._cond:
             self._cond.notify_all()
@@ -438,6 +447,8 @@ def make_handler(app):
                     if "stats_api" in body:
                         app._apply_reading()
                     app.changed()
+                elif path == "/api/swap":
+                    app.swap_sides()
                 elif path == "/api/reader":
                     app.set_reading(body.get("enabled"))
                 elif path == "/api/statsapi/enable":
