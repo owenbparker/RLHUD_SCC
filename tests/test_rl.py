@@ -259,7 +259,7 @@ class EngineLinkTests(unittest.TestCase):
                         time.sleep(0.05)
                     sent = [b for b in ingests if b.get("series") and b.get("fields")][0]
                     self.assertEqual((sent["source"], sent["game"]), ("Rocket League HUD", "rl"))
-                    self.assertEqual(sent["series"]["left"], {"name": "TEAM FALCONS", "short": "FLCN", "score": 2, "color": "#1d5fd6"})
+                    self.assertEqual(sent["series"]["left"], {"score": 2})   # (never its teams: Global has those)
                     self.assertEqual(sent["series"]["best_of"], 7)
                     self.assertEqual(sent["fields"]["left_goals"], 4)
                     self.assertEqual(sent["fields"]["right_p1_name"], "ATOMIC")

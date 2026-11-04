@@ -49,7 +49,8 @@ class HudApp:
         # The SCC GFX Engine: the match and series go to it; its teams can come here.
         self.engine = EngineLink("Rocket League HUD", "rl", self._engine_snapshot, self._engine_apply_global,
                                  load=lambda: self.config.get().get("gfx_engine"),
-                                 save=lambda d: self.config.update({"gfx_engine": d}), log=log)
+                                 save=lambda d: self.config.update({"gfx_engine": d}), log=log,
+                                 swap=lambda: self.swap_sides(engine=False))
         if demo:
             self.set_demo(True)
 
@@ -243,7 +244,7 @@ class HudApp:
         with self._cond:
             self._cond.wait(timeout)
 
-    def swap_sides(self):
+    def swap_sides(self, engine=True):
         """The teams change sides (blue and orange): their names, tricodes,
         regions, logos and games won. The colours stay with the side."""
         cfg = self.config.get()
@@ -251,6 +252,8 @@ class HudApp:
         self.config.update({"left": dict(cfg["right"], **keep("left")), "right": dict(cfg["left"], **keep("right"))})
         log(f"Sides swapped: {cfg['right']['name'] or 'orange team'} on blue")
         self.changed()
+        if engine:   # (connected: the GFX Engine's Global teams swap too, as the HUD follows them)
+            self.engine.swap_global()
 
     def changed(self):
         with self._cond:
