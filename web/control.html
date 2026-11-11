@@ -176,6 +176,18 @@
     <select id="scorebug"><option value="auto">Around goals, replays and kickoffs</option><option value="expanded">Always</option>
       <option value="compact">Never (logos only)</option></select>
   </section>
+  <section class="wide" data-page="editor overview">
+    <h2>Overlay from GFX Engine</h2>
+    <div class="note" id="look-status" style="margin-top:0"></div>
+    <div class="row" style="margin-top:8px;flex-wrap:wrap;gap:8px">
+      <button id="look-use"></button>
+      <button id="look-check">Check the engine now</button>
+      <button id="look-load">Load an exported .zip…</button>
+      <button id="look-remove">Remove it</button>
+    </div>
+    <input type="file" id="look-file" accept=".zip" hidden>
+    <p class="note">Make it in GFX Engine: Composer, pick the graphic, then <b>Add this to a game HUD</b> (Rocket League). This HUD takes each new version from the engine it's connected to, and plays it with its own live data. The built-in overlay is always at <code>/overlay-classic</code>.</p>
+  </section>
   <section data-page="editor">
     <h2>Show</h2>
     <div class="checks">
@@ -214,6 +226,12 @@
     </details>
   </section>
   <section class="wide" data-page="teams">
+    <div class="h2row"><h2>Player cams</h2><label class="toggle" style="margin:0"><input type="checkbox" id="cams-on"> Show the cams</label></div>
+    <p class="note" style="margin-top:0">The spectated player's cam shows in the GFX Engine overlay's cam box, which slides away when they have none. Two ways in: the player runs <b>SCC Player Cam</b> on their PC, picks Rocket League and types their in-game name and this PC's address; or type a cam link (a VDO.Ninja view link) beside their in-game name below. A link wins. Other PCs need "Let other PCs on the network read the HUD" on.</p>
+    <div class="cam-links" id="cam-links"></div>
+    <div class="cam-list" id="cam-list"></div>
+  </section>
+  <section class="wide" data-page="teams">
     <h2>Player names</h2>
     <p class="note" style="margin-top:0">Show a different name for a player (e.g. their full tag); empty uses the in-game name.</p>
     <div class="names" id="names"></div>
@@ -237,6 +255,8 @@
       <div class="row"><code id="url-local"></code><button data-copy="url-local">Copy</button></div></div>
     <div class="out" id="lan-box" hidden><span>From another PC</span>
       <div class="row"><code id="url-lan"></code><button data-copy="url-lan">Copy</button></div></div>
+    <div class="out" id="https-box" hidden><span>From another PC, with cam links (VDO.Ninja) — accept the certificate warning once</span>
+      <div class="row"><code id="url-https"></code><button data-copy="url-https">Copy</button></div></div>
     <label class="toggle"><input type="checkbox" id="network"> Let other PCs on the network read the HUD</label>
   </section>
   <section data-page="overview">
@@ -370,6 +390,10 @@ function apply(s) {
   $("url-local").textContent = `http://localhost:${app.port}/overlay`;
   $("lan-box").hidden = !app.lan_url;
   if (app.lan_url) $("url-lan").textContent = app.lan_url + "/overlay";
+  $("https-box").hidden = !app.https_url;
+  if (app.https_url) $("url-https").textContent = app.https_url + "/overlay";
+  renderLook(app.look || {}, cfg);
+  renderCams(s.cams || {}, cfg, g);
   if (document.activeElement !== $("network")) $("network").checked = app.network;
   const ow = app.overlay_window;
   $("ow").hidden = !ow.available;
@@ -396,6 +420,74 @@ $("network").onchange = e => post("/api/network", { on: e.target.checked });
 $("ow-btn").onclick = () => post("/api/overlay-window", { open: !state.app.overlay_window.open });
 $("ow-screen").onchange = e => post("/api/overlay-window", { open: state.app.overlay_window.open, screen: Number(e.target.value) });
 for (const b of document.querySelectorAll("[data-copy]")) b.onclick = () => navigator.clipboard.writeText($(b.dataset.copy).textContent);
+
+// --- the overlay from GFX Engine ---------------------------------------------
+function renderLook(info, cfg) {
+  const lk = info.look, use = (cfg.look || {}).use !== false;
+  const when = lk && lk.at ? new Date(lk.at * 1000).toLocaleString() : "";
+  $("look-status").innerHTML = lk
+    ? `<b>${lk.name || "Graphic"}</b>${lk.rev ? ` (version ${lk.rev})` : ""} from ${lk.from || "the GFX Engine"}${when ? `, made ${when}` : ""}. `
+      + (use ? "It's the overlay now." : "Not shown: the built-in overlay is on.")
+    : "No graphic from the GFX Engine yet: the built-in overlay shows.";
+  if (info.error) $("look-status").innerHTML += `<br><span style="color:var(--bad,#ff5a5a)">Couldn't take the engine's graphic: ${info.error}</span>`;
+  else if (info.engine_has) $("look-status").innerHTML += `<br>Taking "${info.engine_has.name}" from the engine…`;
+  $("look-use").hidden = !lk;
+  $("look-remove").hidden = !lk;
+  $("look-use").textContent = use ? "Use the built-in overlay instead" : "Use the GFX Engine overlay";
+}
+$("look-use").onclick = () => config({ look: { use: (state.config.look || {}).use === false } });
+$("look-check").onclick = () => post("/api/look/check", {});
+$("look-remove").onclick = () => { if (confirm("Remove the GFX Engine overlay? The built-in one shows until the engine sends it again.")) post("/api/look/remove", {}); };
+$("look-load").onclick = () => $("look-file").click();
+$("look-file").onchange = async e => {
+  const f = e.target.files[0]; e.target.value = "";
+  if (f) post("/api/look/upload", { name: f.name, data: await readFile(f) });
+};
+
+// --- player cams ---------------------------------------------------------------
+const camPost = body => post("/api/cams", body);
+function renderCams(cams, cfg, g) {
+  const cc = cfg.cams || {};
+  if (document.activeElement !== $("cams-on")) $("cams-on").checked = cc.on !== false;
+  const links = (cc.links || []).slice();
+  while (links.length < 6 || (links.length < 12 && links[links.length - 1].name)) links.push({ name: "", link: "" });
+  const key = links.length + "|" + g.players.map(p => p.name).join(",");
+  if ($("cam-links").dataset.key !== key) {
+    $("cam-links").dataset.key = key;
+    const names = g.players.map(p => `<option value="${p.name.replace(/"/g, "&quot;")}">`).join("");
+    $("cam-links").innerHTML = `<datalist id="cam-names">${names}</datalist>` + links.map((l, i) =>
+      `<div class="cam-row"><input data-i="${i}" data-k="name" list="cam-names" placeholder="In-game name" spellcheck="false">` +
+      `<input data-i="${i}" data-k="link" placeholder="Cam link, e.g. https://vdo.ninja/?view=abc123" spellcheck="false"><span class="m" data-m="${i}"></span></div>`).join("");
+    for (const el of $("cam-links").querySelectorAll("input")) el.oninput = () => {
+      clearTimeout(el._t);
+      el._t = setTimeout(() => {
+        const list = [...$("cam-links").querySelectorAll(".cam-row")].map(r => ({ name: r.children[0].value.trim(), link: r.children[1].value.trim() }))
+          .filter(r => r.name || r.link);
+        camPost({ links: list });
+      }, 400);
+    };
+  }
+  for (const el of $("cam-links").querySelectorAll("input")) setIfIdle(el, (links[+el.dataset.i] || {})[el.dataset.k] || "");
+  const matched = new Map((cams.links || []).map(l => [l.name.toLowerCase(), l]));
+  for (const m of $("cam-links").querySelectorAll("[data-m]")) {
+    const l = links[+m.dataset.m] || {}, hit = l.name && matched.get(l.name.toLowerCase());
+    m.textContent = !l.name ? "" : !l.link ? "" : hit && hit.player ? "✓ in the match" : hit ? "not in this match" : "not a web address";
+    m.className = "m " + (hit && hit.player ? "ok" : "");
+  }
+  const hidden = (cc.hidden || []).map(x => String(x).toLowerCase());
+  const list = cams.connected || [];
+  $("cam-list").innerHTML = list.length ? "<label>Player Cams connected</label>" + list.map(c => {
+    const off = hidden.includes((c.riot_id || "").toLowerCase());
+    return `<div class="cam-row"><b>${c.riot_id || "(no name yet)"}</b><span class="note" style="margin:0">${c.label || ""}</span>` +
+      `<span class="m ${c.player ? "ok" : ""}">${c.player ? "✓ " + c.player.name : "not in this match"}</span>` +
+      (c.riot_id ? `<button data-hide="${c.riot_id.replace(/"/g, "&quot;")}">${off ? "Show" : "Hide"}</button>` : "") + "</div>";
+  }).join("") : '<p class="note">No Player Cams connected.</p>';
+  for (const b of $("cam-list").querySelectorAll("[data-hide]")) b.onclick = () => {
+    const n = b.dataset.hide.toLowerCase(), now = (state.config.cams.hidden || []).map(x => String(x).toLowerCase());
+    camPost({ hidden: now.includes(n) ? now.filter(x => x !== n) : now.concat([n]) });
+  };
+}
+$("cams-on").onchange = e => camPost({ on: e.target.checked });
 
 function readFile(file) {
   return new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(file); });
@@ -444,6 +536,12 @@ poll(); pollLog(); fitPreview();
   .link-row b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .link-row select { padding: 5px 8px; margin: 0; }
   .linked { color: #3ecf6e; font-size: 12px; }
+  .cam-row { display: grid; grid-template-columns: 200px minmax(0, 1fr) 140px; gap: 8px; align-items: center; padding: 4px 0; }
+  .cam-list .cam-row { grid-template-columns: 200px minmax(0, 1fr) 160px 70px; border-bottom: 1px solid var(--line); }
+  .cam-row input { margin: 0; }
+  .cam-row .m { font-size: 12px; color: var(--muted); }
+  .cam-row .m.ok { color: #3ecf6e; }
+  @media (max-width: 700px) { .cam-row, .cam-list .cam-row { grid-template-columns: 1fr; } }
   .unlinked { color: #ff5a5a; font-size: 12px; }
 </style>
 <script>

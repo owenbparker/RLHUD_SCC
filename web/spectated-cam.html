@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Spectated cam</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
+  video, iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; object-fit: cover; opacity: 0; }
+  video.on, iframe.on { opacity: 1; }
+  #demo { position: absolute; inset: 0; display: none; background: radial-gradient(circle at 50% 38%, #4a4c58, #1b1c22 72%);
+          color: #fff; font: 800 22px system-ui, sans-serif; align-items: center; justify-content: center; text-transform: uppercase; }
+  #demo.on { display: flex; }
+</style>
+</head>
+<body>
+<div id="demo"></div>
+<script>
+// The spectated player's cam, filling the page: for the GFX Engine overlay's
+// cam box (a web page layer showing {{Rocket League HUD!target_cam}}). Their
+// Player Cam (WebRTC, straight from their PC), or the link typed beside their
+// name (VDO.Ninja), which wins. Every connected cam and link is kept open, so
+// a new spectated player is a straight cut; with no cam the page is empty
+// (the overlay slides its box away: target_has_cam).
+(function () {
+  "use strict";
+  const ME = Math.random().toString(16).slice(2, 18);
+  const peers = {};   // cam id -> {pc, video, started}
+  const frames = {};  // link -> <iframe>
+  let registered = false;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const post = (path, body) => fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+    .then(r => r.json().then(d => { if (!r.ok) throw new Error(d.error || r.status); return d; }));
+
+  function drop(id) {
+    const p = peers[id];
+    if (!p) return;
+    delete peers[id];
+    try { p.pc.close(); } catch (e) { /* closed */ }
+    p.video.remove();
+  }
+  function gathered(pc) {
+    if (pc.iceGatheringState === "complete") return Promise.resolve();
+    return new Promise(resolve => {
+      pc.addEventListener("icegatheringstatechange", () => { if (pc.iceGatheringState === "complete") resolve(); });
+      setTimeout(resolve, 2500);
+    });
+  }
+  // WebRTC hides each PC's address behind "<id>.local", which doesn't reach
+  // across networks (VLANs): the HUD says where each message came from.
+  function unhide(sdp, ip, hubHost) {
+    if (ip && /^(127\.|::1$|::ffff:127\.)/.test(ip)) ip = /^localhost$/i.test(hubHost) ? "127.0.0.1" : hubHost;
+    if (!sdp || !ip || !/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return sdp;
+    return sdp.replace(/^(a=candidate:\S+ \d+ \S+ \d+ )\S+\.local( \d+ typ host)/gm, "$1" + ip + "$2");
+  }
+  function connect(id) {
+    const video = document.createElement("video");
+    video.autoplay = video.muted = video.playsInline = true;
+    document.body.appendChild(video);
+    const pc = new RTCPeerConnection({ iceServers: [] });
+    peers[id] = { pc, video, started: Date.now() };
+    pc.addTransceiver("video", { direction: "recvonly" });
+    pc.ontrack = e => { video.srcObject = e.streams[0] || new MediaStream([e.track]); video.play().catch(() => {}); };
+    pc.onconnectionstatechange = () => { if (pc.connectionState === "failed" || pc.connectionState === "closed") drop(id); };
+    pc.createOffer().then(o => pc.setLocalDescription(o)).then(() => gathered(pc))
+      .then(() => post("/api/cam/send", { to: id, from: ME, data: { type: "offer", sdp: pc.localDescription.sdp } }))
+      .catch(() => drop(id));
+  }
+  (async function inbox() {
+    for (;;) {
+      try {
+        const r = await post("/api/cam/poll", { id: ME, wait: registered ? 20 : 0 });
+        registered = true;
+        for (const m of r.messages || []) {
+          const p = peers[m.from];
+          if (!p) continue;
+          if (m.type === "answer" && p.pc.signalingState === "have-local-offer")
+            p.pc.setRemoteDescription({ type: "answer", sdp: unhide(m.sdp, m.ip, location.hostname) }).catch(() => drop(m.from));
+          else if (m.type === "bye") drop(m.from);
+        }
+      } catch (e) { await sleep(2000); }
+    }
+  })();
+  addEventListener("pagehide", () => {
+    for (const id of Object.keys(peers)) if (navigator.sendBeacon)
+      navigator.sendBeacon("/api/cam/send", new Blob([JSON.stringify({ to: id, from: ME, data: { type: "bye" } })], { type: "text/plain" }));
+  });
+
+  // A link as it plays here: VDO.Ninja fills the box, without its buttons or sound.
+  function linkUrl(link) {
+    try {
+      const u = new URL(link);
+      if (/(^|\.)vdo\.ninja$|(^|\.)obs\.ninja$/.test(u.hostname))
+        ["cover", "cleanoutput", "noaudio"].forEach(p => { if (!u.searchParams.has(p)) u.searchParams.set(p, ""); });
+      return u.toString();
+    } catch (e) { return link; }
+  }
+  function frame(link) {
+    if (!frames[link]) {
+      const f = document.createElement("iframe");
+      f.allow = "autoplay; camera; microphone";
+      f.src = linkUrl(link);
+      document.body.appendChild(f);
+      frames[link] = f;
+    }
+    return frames[link];
+  }
+
+  let lastKey = "";
+  function render(s) {
+    const cams = s.cams || {}, pubs = cams.on === false ? [] : cams.publishers || [];
+    const links = cams.on === false ? [] : (cams.links || []).map(l => l.link).filter(Boolean);
+    const key = pubs.map(p => p.id).join(",") + "|" + registered;
+    if (key !== lastKey) {
+      lastKey = key;
+      const want = new Set(pubs.map(p => p.id));
+      for (const id of want) if (registered && !peers[id]) connect(id);
+      for (const id of Object.keys(peers)) if (!want.has(id)) drop(id);
+    }
+    for (const p of pubs) {
+      const peer = peers[p.id];
+      if (peer && peer.pc.connectionState !== "connected" && Date.now() - peer.started > 10000) { drop(p.id); lastKey = ""; }
+    }
+    for (const l of links) frame(l);
+    for (const l of Object.keys(frames)) if (!links.includes(l)) { frames[l].remove(); delete frames[l]; }
+    const cam = s.target_cam;
+    for (const [id, p] of Object.entries(peers)) p.video.classList.toggle("on", !!cam && cam.id === id);
+    for (const [l, f] of Object.entries(frames)) f.classList.toggle("on", !!cam && cam.link === l);
+    // The demo match: a stand-in cam with the spectated player's name.
+    const demo = document.getElementById("demo"), fake = !!(cam && cam.demo);
+    demo.classList.toggle("on", fake);
+    if (fake) demo.textContent = (s.fields || {}).target || "";
+  }
+  const es = new EventSource("/api/stream");
+  es.onmessage = e => { try { render(JSON.parse(e.data)); } catch (err) { console.error(err); } };
+})();
+</script>
+</body>
+</html>

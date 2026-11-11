@@ -116,6 +116,12 @@ def main():
     try:
         import webview
         from .overlay_window import OverlayWindow
+        # The Observer Client's HUD window shows the GFX PC's HUD over https,
+        # with the certificate that PC made for itself (see tls.py).
+        try:
+            webview.settings["IGNORE_SSL_ERRORS"] = True
+        except (AttributeError, TypeError):
+            pass
         window = webview.create_window(f"{TITLE} {app.updater.current}", url, width=1280, height=720,
                                        min_size=(960, 600), background_color="#0e1012", text_select=True)
         if own_server:

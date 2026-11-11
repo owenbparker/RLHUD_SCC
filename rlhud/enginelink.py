@@ -230,6 +230,7 @@ class EngineLink:
         self._follow_error = ""
         self._wake = threading.Event()
         self._stop = threading.Event()
+        self.every = 1.0           # seconds between sends (a HUD can send more often while its game is live)
         if self.hud_id != saved.get("hud_id"):
             self._remember()
         threading.Thread(target=self._run, daemon=True).start()
@@ -444,7 +445,7 @@ class EngineLink:
 
     def _run(self):
         while not self._stop.is_set():
-            self._wake.wait(1.0)
+            self._wake.wait(max(0.1, float(self.every() if callable(self.every) else self.every)))
             self._wake.clear()
             if not self.connected or not self.url:
                 continue

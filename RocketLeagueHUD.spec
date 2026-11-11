@@ -15,6 +15,7 @@ hidden, datas = [], [(os.path.join(root, "web"), "web")]
 if sys.platform == "win32":
     # pywebview's Windows window (Edge WebView2) is loaded at runtime.
     hidden += ["webview.platforms.winforms", "webview.platforms.edgechromium", "clr"]
+    hidden += ["cryptography"]  # https certificate (cam links on another PC)
 
 a = Analysis(
     [os.path.join(root, "RocketLeagueHUD.py")],

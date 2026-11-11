@@ -159,7 +159,8 @@ class ServerTests(unittest.TestCase):
                     req = urllib.request.Request(base + path, json.dumps(body).encode(), {"Content-Type": "application/json"})
                     return json.loads(urllib.request.urlopen(req, timeout=5).read())
 
-                for path in ("/start", "/control", "/observer", "/overlay", "/update.js", "/enginelink.js", "/fonts/Saira-ExtraBoldItalic.ttf"):
+                for path in ("/start", "/control", "/observer", "/overlay", "/overlay-classic", "/spectated-cam", "/look-live.js",
+                             "/update.js", "/enginelink.js", "/fonts/Saira-ExtraBoldItalic.ttf"):
                     with urllib.request.urlopen(base + path, timeout=5) as r:
                         self.assertEqual(r.status, 200, path)
                         r.read()
@@ -282,3 +283,63 @@ class EngineLinkTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LookAndCamTests(unittest.TestCase):
+    """The GFX Engine overlay (Add to a HUD) and the player cams."""
+
+    def test_install_and_page(self):
+        import io
+        import zipfile
+        from rlhud import look
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("index.html", '<html><head></head><body><script src="gfx-data.js"></script><script src="runtime.js"></script></body></html>')
+            z.writestr("gfx-data.js", "window.GFX_EXPORT = {};")
+            z.writestr("runtime.js", "")
+            z.writestr("assets/a.png", b"png")
+            z.writestr("../evil.txt", "no")
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(look.current(tmp))
+            meta = look.install(tmp, buf.getvalue(), {"name": "RL HUD", "rev": 3})
+            self.assertEqual((meta["name"], look.current(tmp)["rev"]), ("RL HUD", 3))
+            self.assertTrue(os.path.isfile(os.path.join(tmp, "look", "assets", "a.png")))
+            self.assertFalse(os.path.exists(os.path.join(tmp, "evil.txt")))
+            page = look.page(tmp)
+            self.assertIn('<base href="/look/">', page)
+            self.assertLess(page.index("/look-live.js"), page.index("gfx-data.js"))
+            with self.assertRaises(ValueError):
+                look.install(tmp, b"not a zip", {})
+            look.remove(tmp)
+            self.assertIsNone(look.current(tmp))
+
+    def test_cams_match_by_name(self):
+        from rlhud.cams import CamHub, cam_links, match_players
+        players = [{"team": 0, "slot": 1, "name": "DRALII", "also": ["Dralii!"]}, {"team": 1, "slot": 1, "name": "ATOMIC", "also": [""]}]
+        self.assertEqual(match_players(["dralii!", "atomic", "nobody"], players),
+                         {"dralii!": {"team": 0, "slot": 1, "name": "DRALII"}, "atomic": {"team": 1, "slot": 1, "name": "ATOMIC"}})
+        links = cam_links([{"name": "ATOMIC", "link": "vdo.ninja/?view=abc"}, {"name": "", "link": "x"}], players)
+        self.assertEqual(links, [{"name": "ATOMIC", "link": "https://vdo.ninja/?view=abc", "player": {"team": 1, "slot": 1, "name": "ATOMIC"}}])
+        hub = CamHub()
+        hub.poll("cam1", "Atomic", "C615", wait=0)
+        self.assertEqual(hub.publishers(players)[0]["player"]["name"], "ATOMIC")
+
+    def test_spectated_fields_and_cam(self):
+        from rlhud.app import HudApp
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Config(os.path.join(tmp, "config.json"))
+            app = HudApp(cfg)
+            try:
+                app.state.apply("UpdateState", UPDATE["Data"])
+                f = app._engine_snapshot()["fields"]
+                self.assertEqual((f["target"], f["target_side"], f["target_goals"], f["target_boost"], f["target_has_cam"]),
+                                 ("ATOMIC", "right", 1, 45, ""))
+                self.assertEqual((f["right_p1_spectated"], f["left_p1_spectated"], f["left_p1_here"], f["left_p2_here"]), (1, "", 1, ""))
+                cfg.update({"cams": {"links": [{"name": "atomic", "link": "https://vdo.ninja/?view=x"}]}})
+                f = app._engine_snapshot(here=True)["fields"]
+                self.assertEqual((f["target_has_cam"], f["target_cam"]), (1, "/spectated-cam"))
+                self.assertEqual(app.target_cam(app.state.snapshot())["link"], "https://vdo.ninja/?view=x")
+                cfg.update({"cams": {"on": False}})
+                self.assertEqual(app._engine_snapshot()["fields"]["target_has_cam"], "")
+            finally:
+                app.stop()

@@ -1,3 +1,5 @@
 # Desktop app extras (Windows): the app window and the HUD-on-game window.
 pywebview
 pillow
+# The https certificate (VDO.Ninja cam links on another PC).
+cryptography

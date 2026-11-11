@@ -7,13 +7,15 @@ import mimetypes
 import os
 import re
 import socket
+import ssl
 import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import statsapi
+from . import look, statsapi
+from .cams import CamHub, cam_links
 from .config import DATA_DIR, LOGO_DIR, SPONSOR_DIR, WEB_DIR, web_file
 from .demo import DemoMatch
 from .enginelink import EngineLink, save_logo_bytes, save_sponsors
@@ -25,7 +27,8 @@ mimetypes.add_type("font/ttf", ".ttf")
 mimetypes.add_type("image/svg+xml", ".svg")
 
 PAGES = {"/": "/start", "/start": "start.html", "/control": "control.html", "/observer": "observer.html",
-         "/overlay": "overlay.html"}
+         "/overlay": "overlay.html", "/overlay-classic": "overlay.html", "/spectated-cam": "spectated-cam.html"}
+CAM_PATHS = ("/api/cam/poll", "/api/cam/send", "/api/cam/list")
 SEND_EVERY = 1 / 30   # observer -> GFX PC
 
 
@@ -51,6 +54,11 @@ class HudApp:
                                  load=lambda: self.config.get().get("gfx_engine"),
                                  save=lambda d: self.config.update({"gfx_engine": d}), log=log,
                                  swap=lambda: self.swap_sides(engine=False))
+        # (a few times a second while the ball is in play, so the engine's boost and clock keep up)
+        self.engine.every = lambda: 0.25 if self.state.phase in ("live", "countdown", "goal") else 1.0
+        self.cams = CamHub()   # player webcams (SCC Player Cam, Rocket League mode)
+        # The overlay made in the GFX Engine's Composer ("Add to a HUD").
+        self.look = look.LookSync(DATA_DIR, self.engine, self.changed)
         if demo:
             self.set_demo(True)
 
@@ -154,28 +162,120 @@ class HudApp:
         lan = lan_ip() if cfg.get("allow_network") else None
         source = "demo" if self.demo else ("observer" if time.time() - self.ingest_at < 5 else
                                             "game" if self.stats.connected else None)
+        https = self.server.https_port if self.server and self.server.httpsd else None
         return {"role": self.role, "port": port, "lan_url": f"http://{lan}:{port}" if lan else None,
+                "https_port": https, "https_url": f"https://{lan}:{https}" if lan and https else None,
+                "look": self.look.info(),
                 "network": bool(cfg.get("allow_network")), "demo": bool(self.demo), "source": source,
                 "stats": dict(self.stats.info(), read=cfg["stats_api"]["read"], files=statsapi.config_files()),
                 "update": self.updater.info(), "data_dir": DATA_DIR,
                 "overlay_window": self.overlay_window.info() if self.overlay_window else {"available": False}}
 
     def snapshot(self):
-        return {"game": self.state.snapshot(), "config": self.config.get(), "app": self.info(), "logos": logos()}
+        game = self.state.snapshot()
+        return {"game": game, "config": self.config.get(), "app": self.info(), "logos": logos(),
+                "cams": dict(self.cams_state(game), connected=self.cams.all_cams(self.cam_players(game)))}
 
     def overlay_state(self):
         cfg = self.config.get()
         keep = ("left", "right", "best_of", "event", "stage", "scorebug", "names", "sponsors", "sponsor_seconds", "show")
-        return {"game": self.state.snapshot(), "config": {k: cfg[k] for k in keep}}
+        game = self.state.snapshot()
+        cams = self.cams_state(game)
+        return {"game": game, "config": {k: cfg[k] for k in keep},
+                # (the GFX Engine overlay's data, and who has a cam)
+                "fields": self._engine_snapshot(here=True)["fields"], "cams": cams,
+                "target_cam": self.target_cam(game, cams), "now": time.time(),
+                # (the engine's Global, when connected: the teams' colours, the event)
+                "global": self._global_bits()}
+
+    def _global_bits(self):
+        g = self.engine.engine_global if self.engine.connected else None
+        if not isinstance(g, dict):
+            return None
+        out = {k: g.get(k) for k in ("event", "stage") if isinstance(g.get(k), str)}
+        for side in ("left", "right"):
+            t = g.get(side) if isinstance(g.get(side), dict) else {}
+            out[side] = {"color": t.get("color") or ""}
+        return out
 
     # --- the SCC GFX Engine -------------------------------------------------------------
 
-    def _engine_snapshot(self):
-        """What the GFX Engine gets: the match as flat fields, and the series."""
+    # --- player cams -------------------------------------------------------------------
+
+    def cam_players(self, game=None):
+        """The players in the match, as cams are matched to them:
+        [{"team": 0|1, "slot": 1.., "name", "also": [the name the HUD shows]}]."""
+        game = game or self.state.snapshot()
+        names = self.config.get().get("names") or {}
+        out = []
+        for team in (0, 1):
+            for slot, p in enumerate([p for p in game["players"] if p["team"] == team], 1):
+                out.append({"team": team, "slot": slot, "name": p["name"], "also": [names.get(p["name"]) or ""]})
+        return out
+
+    def cams_state(self, game=None):
+        """Who has a cam: {"publishers": [...], "links": [...]} (cams.hidden left out)."""
+        cc = self.config.get().get("cams") or {}
+        players = self.cam_players(game)
+        hidden = {str(n).lower() for n in cc.get("hidden") or []}
+        pubs = [p for p in self.cams.publishers(players) if p["riot_id"].lower() not in hidden]
+        links = [l for l in cam_links(cc.get("links"), players) if l["link"] and l["name"].lower() not in hidden]
+        return {"publishers": pubs, "links": links, "on": cc.get("on", True) is not False}
+
+    def target_cam(self, game, cams=None):
+        """The spectated player's cam: {"link"} or {"id"} (a Player Cam), or None."""
+        t = game.get("target")
+        if not t or t.get("team") not in (0, 1):
+            return None
+        cams = cams or self.cams_state(game)
+        if not cams["on"]:
+            return None
+        slot = next((p["slot"] for p in self.cam_players(game) if p["team"] == t["team"] and p["name"] == t["name"]), None)
+        for l in cams["links"]:
+            if l["player"] and l["player"]["team"] == t["team"] and l["player"]["slot"] == slot:
+                return {"link": l["link"], "name": l["name"]}
+        for p in cams["publishers"]:
+            if p["player"] and p["player"]["team"] == t["team"] and p["player"]["slot"] == slot:
+                return {"id": p["id"], "name": p["riot_id"]}
+        if self.demo:   # (the demo match: everyone has a stand-in cam, to see the box work)
+            return {"demo": True, "name": t["name"]}
+        return None
+
+    def cam_post(self, path, body, client=None):
+        """Webcam messages (also from other PCs on the network)."""
+        if path == "/api/cam/poll":
+            result = self.cams.poll(str(body.get("id") or ""), body.get("riot_id"), body.get("label"), body.get("wait", 20))
+            if result.get("riot_id"):
+                result["player"] = next((p["player"] for p in self.cams.publishers(self.cam_players())
+                                         if p["id"] == body.get("id")), None)
+            return result
+        if path == "/api/cam/send":
+            self.cams.send(str(body.get("to") or ""), str(body.get("from") or ""), body.get("data"), client)
+            return {"ok": True}
+        if path == "/api/cam/list":
+            # The cams connected now, for the GFX Engine's Camera Control Room.
+            cams = []
+            for p in self.cams.all_cams(self.cam_players()):
+                who = p["player"]
+                cams.append({"id": p["id"], "label": p["label"], "riot_id": p["riot_id"],
+                             "player": who["name"] if who else "", "team": ("left", "right")[who["team"]] if who else ""})
+            return {"game": "rl", "cams": cams}
+        raise KeyError(path)
+
+    def _engine_snapshot(self, here=False):
+        """What the GFX Engine gets: the match as flat fields, and the series.
+        here: for this HUD's own overlay (pictures and the cam at this address)."""
         cfg = self.config.get()
         game = self.state.snapshot()
         names = cfg.get("names") or {}
+        target = game.get("target") or {}
         f = {}
+        # Pictures and pages as the engine's outputs (on any PC) reach them.
+        port = self.server.port if self.server else cfg["http_port"]
+        ip = lan_ip() if cfg.get("allow_network") else None
+        base = "" if here else f"http://{ip or '127.0.0.1'}:{port}"
+        pic = lambda rel: (f"{base}/{rel}" if rel and not re.match(r"https?://", rel) else rel or "")
+        team_size = 0
         for i, side in enumerate(("left", "right")):
             team = cfg[side]
             f[f"{side}_name"] = team["name"]
@@ -183,25 +283,61 @@ class HudApp:
             f[f"{side}_goals"] = game["teams"][i]["score"]
             f[f"{side}_series"] = int(team["wins"] or 0)
             players = [p for p in game["players"] if p["team"] == i]
-            for n, p in enumerate(players[:4], 1):
+            team_size = max(team_size, len(players))
+            for n in range(1, 5):
                 key = f"{side}_p{n}"
+                p = players[n - 1] if n <= len(players) else None
+                if not p:
+                    if n <= 3:   # (an empty row: a 2v2 or 1v1, or no match yet)
+                        for k in ("name", "ign", "goals", "assists", "saves", "shots", "score", "demos", "touches", "boost",
+                                  "spectated", "demolished", "here"):
+                            f[f"{key}_{k}"] = ""
+                    continue
                 f[key + "_name"] = names.get(p["name"]) or p["name"]
                 f[key + "_ign"] = p["name"]   # (the game's own name: what GFX Engine links its roster by)
-                for stat in ("goals", "assists", "saves", "shots", "score", "demos"):
+                for stat in ("goals", "assists", "saves", "shots", "score", "demos", "touches"):
                     f[f"{key}_{stat}"] = p[stat]
                 f[key + "_boost"] = p["boost"] if p["boost"] is not None else ""
+                f[key + "_spectated"] = 1 if target and target.get("name") == p["name"] and target.get("team") == i else ""
+                f[key + "_demolished"] = 1 if p.get("demolished") else ""
+                f[key + "_here"] = 1
         clock = int(game["clock"] or 0)
         f["clock"] = ("+" if game["overtime"] else "") + f"{clock // 60}:{clock % 60:02d}"
         f["clock_seconds"] = clock
-        f["overtime"] = bool(game["overtime"])
+        f["overtime"] = 1 if game["overtime"] else ""
         f["phase"] = game["phase"]
+        f["live"] = 1 if game["phase"] == "live" else ""
+        f["replay"] = 1 if game["replay"] or game["phase"] == "replay" else ""
+        f["team_size"] = team_size
         f["best_of"] = int(cfg.get("best_of") or 7)
         f["event"] = cfg.get("event") or ""
         f["stage"] = cfg.get("stage") or ""
-        target = game.get("target") or {}
         f["target"] = names.get(target.get("name")) or target.get("name") or ""
+        # The spectated player: their stats, their team, their cam.
+        tp = next((p for p in game["players"] if target and p["name"] == target.get("name") and p["team"] == target.get("team")), None)
+        side = ("left", "right")[target["team"]] if target and target.get("team") in (0, 1) else ""
+        f["target_side"] = side
+        for stat in ("goals", "assists", "saves", "shots", "score", "demos", "touches", "speed"):
+            f["target_" + stat] = tp[stat] if tp else ""
+        f["target_boost"] = tp["boost"] if tp and tp["boost"] is not None else ""
+        f["target_logo"] = pic(cfg[side]["logo"]) if side else ""
+        gb = self._global_bits() or {}
+        f["target_color"] = ((gb.get(side) or {}).get("color") or cfg[side]["color"]) if side else ""
+        cam = self.target_cam(game) if tp else None
+        f["target_has_cam"] = 1 if cam else ""
+        # (one page for whoever is spectated: it switches cams itself, never reloading)
+        https = self.server.https_port if self.server and self.server.httpsd else None
+        f["target_cam"] = "/spectated-cam" if here else (f"https://{ip or '127.0.0.1'}:{https}/spectated-cam" if https and ip
+                                                          else f"{base}/spectated-cam")
+        goal = game.get("goal") or {}
+        scorer, assister = goal.get("scorer") or {}, goal.get("assister") or {}
+        f["goal_scorer"] = (names.get(scorer.get("name")) or scorer.get("name") or "") if goal else ""
+        f["goal_assister"] = (names.get(assister.get("name")) or assister.get("name") or "") if goal else ""
+        f["goal_speed"] = goal.get("speed", "") if goal else ""
+        f["goal_side"] = ("left", "right")[goal["team"]] if goal and goal.get("team") in (0, 1) else ""
         f["ball_speed"] = game["ball_speed"]
         f["arena"] = game["arena"]
+        f["look_rev"] = (look.current(DATA_DIR) or {}).get("rev", "")
         series = {side: {"name": cfg[side]["name"], "short": cfg[side]["tricode"], "score": int(cfg[side]["wins"] or 0),
                          "color": cfg[side]["color"]} for side in ("left", "right")}
         series["best_of"] = f["best_of"]
@@ -265,6 +401,7 @@ class HudApp:
         self._stop.set()
         self.stats.stop()
         self.engine.stop()
+        self.look.stop()
         if self.demo:
             self.demo.stop()
         if self.server:
@@ -402,6 +539,20 @@ def make_handler(app):
         def do_GET(self):
             url = urlparse(self.path)
             path = url.path
+            # The overlay: the graphic from the GFX Engine when there is one (and it's on).
+            if path == "/overlay" and look.current(DATA_DIR) and (app.config.get().get("look") or {}).get("use", True):
+                try:
+                    return self._send(look.page(DATA_DIR), "text/html; charset=utf-8")
+                except OSError:
+                    pass
+            if path.startswith("/look/"):
+                full = look_file(unquote(path[len("/look/"):]))
+                if not full:
+                    return self._json({"error": "not found"}, 404)
+                if full.endswith("index.html"):
+                    return self._send(look.page(DATA_DIR), "text/html; charset=utf-8")
+                with open(full, "rb") as f:
+                    return self._send(f.read(), mimetypes.guess_type(full)[0] or "application/octet-stream")
             if path in PAGES:
                 target = PAGES[path]
                 if target.startswith("/"):
@@ -433,6 +584,18 @@ def make_handler(app):
         def do_POST(self):
             path = urlparse(self.path).path
             local = _is_local(self.client_address[0])
+            if path in CAM_PATHS:
+                # Player cams, from any PC on the network (when it's let in).
+                if not local and not app.config.get().get("allow_network"):
+                    return self._json({"error": "Tick \"Let other PCs on the network read the HUD\" on the HUD's PC"}, 403)
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    if length > 256 * 1024:
+                        raise ValueError("Too big")
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                    return self._json(app.cam_post(path, body, self.client_address[0]))
+                except (ValueError, KeyError, TypeError) as e:
+                    return self._json({"error": str(e)}, 400)
             # Observer PCs send the game here over the network.
             if not local and not (path == "/api/ingest" and app.config.get().get("allow_network")):
                 return self._json({"error": "settings can only be changed on the HUD's own PC"}, 403)
@@ -476,6 +639,31 @@ def make_handler(app):
                     sponsor = save_upload(SPONSOR_DIR, "sponsors/", body.get("name"), body.get("data"))
                     app.config.update({"sponsors": app.config.get()["sponsors"] + [sponsor]})
                     app.changed()
+                elif path == "/api/look/check":
+                    app.look.check_now()
+                elif path == "/api/look/upload":
+                    # A graphic exported from the GFX Engine (Composer > Add to a HUD, or Export), as a zip.
+                    m = re.fullmatch(r"data:[^;,]*;base64,(.+)", body.get("data") or "", re.S)
+                    if not m:
+                        raise ValueError("Send the .zip the GFX Engine exported")
+                    meta = look.install(DATA_DIR, base64.b64decode(m.group(1)),
+                                        {"name": os.path.splitext(os.path.basename(body.get("name") or "Graphic"))[0], "rev": 0,
+                                         "at": time.time(), "engine": "", "from": "a file"})
+                    log(f'Overlay is now "{meta["name"]}" (from a file)')
+                    app.config.update({"look": {"use": True}})
+                    app.changed()
+                elif path == "/api/look/remove":
+                    look.remove(DATA_DIR)
+                    log("Overlay back to the built-in one")
+                    app.changed()
+                elif path == "/api/cams":
+                    # {"links": [{"name", "link"}], "hidden": [...], "on": bool}
+                    changes = {k: body[k] for k in ("links", "hidden", "on") if k in body}
+                    if "links" in changes:
+                        changes["links"] = [{"name": str(e.get("name") or "")[:32], "link": str(e.get("link") or "")[:500]}
+                                            for e in changes["links"] if isinstance(e, dict)][:16]
+                    app.config.update({"cams": changes})
+                    app.changed()
                 elif path == "/api/overlay-window":
                     if not app.overlay_window:
                         raise ValueError("The HUD window needs the Windows desktop app")
@@ -493,9 +681,39 @@ def make_handler(app):
     return Handler
 
 
+def look_file(rel):
+    """A file of the GFX Engine overlay (DATA_DIR/look/...), or None."""
+    base = os.path.realpath(os.path.join(DATA_DIR, "look"))
+    path = os.path.realpath(os.path.join(base, rel.replace("\\", "/").lstrip("/") or "index.html"))
+    return path if path.startswith(base + os.sep) and os.path.isfile(path) else None
+
+
+class TlsServer(ThreadingHTTPServer):
+    """The same server over https (for VDO.Ninja cam links on another PC's
+    HUD window or browser). The handshake happens in each connection's own
+    thread, so a slow one holds nothing up."""
+
+    daemon_threads = True
+
+    def __init__(self, address, handler, context):
+        self.context = context
+        super().__init__(address, handler)
+
+    def finish_request(self, request, client_address):
+        try:
+            request = self.context.wrap_socket(request, server_side=True)
+        except (ssl.SSLError, OSError):
+            return  # e.g. a browser turning down the certificate
+        super().finish_request(request, client_address)
+
+
 class Server:
-    def __init__(self, app, host, port):
-        self.app, self.port = app, port
+    """The HTTP server (and its https twin) in background threads; can be
+    restarted on a new host."""
+
+    def __init__(self, app, host, port, https_port=None):
+        self.app, self.port, self.https_port = app, port, https_port
+        self.httpd = self.httpsd = None
         self._start(host)
 
     def _start(self, host):
@@ -503,22 +721,35 @@ class Server:
         self.httpd.daemon_threads = True
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
         self.host = host
+        self.httpsd = None
+        if self.https_port:
+            try:
+                from .tls import server_context
+                context = server_context(os.path.join(DATA_DIR, "certs"), ["localhost", "127.0.0.1", lan_ip()])
+                if context:
+                    self.httpsd = TlsServer((host, self.https_port), make_handler(self.app), context)
+                    threading.Thread(target=self.httpsd.serve_forever, daemon=True).start()
+            except Exception as e:  # the HUD works without it; only cam links on other PCs need it
+                log(f"Couldn't start https on port {self.https_port} ({e}); cam links won't show on other PCs", "warn")
 
     def restart(self, host):
-        if host != self.host:
-            self.httpd.shutdown()
-            self.httpd.server_close()
-            self._start(host)
+        if host == self.host:
+            return
+        self.stop()
+        self._start(host)
 
     def stop(self):
-        self.httpd.shutdown()
-        self.httpd.server_close()
+        for server in (self.httpd, self.httpsd):
+            if server:
+                server.shutdown()
+                server.server_close()
 
 
 def start(app):
     """Start the web server (raises OSError if the port is taken), reading the game if set to."""
-    port = app.config.get()["http_port"]
-    app.server = Server(app, app.host(), port)
+    cfg = app.config.get()
+    port = cfg["http_port"]
+    app.server = Server(app, app.host(), port, cfg.get("https_port") or port + 10)
     app._apply_reading()
     threading.Thread(target=app._send_loop, daemon=True).start()
     clean_up_old_update()

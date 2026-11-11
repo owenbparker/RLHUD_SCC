@@ -78,6 +78,22 @@ def gfx_base_url(text):
     return f"{u.scheme}://{host}:{port}"
 
 
+def secure_base(base):
+    """The https address a GFX PC's HUD is also served on, or None (an older
+    version, or https unavailable there)."""
+    import json
+    import urllib.request
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(base + "/api/state", timeout=3) as r:
+            port = json.loads(r.read())["app"].get("https_port")
+    except Exception:
+        return None
+    host = urlparse(base).hostname
+    host = f"[{host}]" if ":" in host else host
+    return f"https://{host}:{int(port)}" if port else None
+
+
 def _hwnd(title):
     return ctypes.windll.user32.FindWindowW(None, title) if sys.platform == "win32" else 0
 
@@ -135,6 +151,7 @@ class OverlayWindow:
         self.config, self.port, self.title = config, port, title
         self.window = None
         self.url = None  # another PC's HUD (observer client); None for this PC's
+        self.secure_url = None  # the same over https, when that PC serves it
         self.rect = None
         self.click_through = True
         # "transparent": a see-through page over the cut-out background.
@@ -159,6 +176,7 @@ class OverlayWindow:
             target = gfx_base_url(url) if url else None
             if target != self.url:
                 self.url = target
+                self.secure_url = secure_base(target) if target else None
                 if self.window:
                     self.window.load_url(self._target())
         if screen is not None:
@@ -173,7 +191,12 @@ class OverlayWindow:
     extra = ""  # more URL options (the self-test leaves the scoreboard out)
 
     def _target(self):
-        return f"{self.url or f'http://127.0.0.1:{self.port}'}/overlay?fit=1{self.extra}"
+        # Another PC's HUD over https where it can: over plain http from
+        # another address the page isn't "secure", and cam links (VDO.Ninja)
+        # show blank in it. (This PC's own address counts as secure.)
+        if self.url and not self.secure_url:
+            self.secure_url = secure_base(self.url)
+        return f"{self.secure_url or self.url or f'http://127.0.0.1:{self.port}'}/overlay?fit=1{self.extra}"
 
     def _screen_rect(self):
         screens = monitors() or [(0, 0, 1920, 1080)]

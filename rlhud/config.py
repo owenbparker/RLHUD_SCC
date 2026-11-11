@@ -21,6 +21,8 @@ DEFAULTS = {
     # Not the League (8777, 8779), VALORANT (8778) or CoD (8780) HUD's ports.
     "http_host": "127.0.0.1",
     "http_port": 8781,
+    # The same over https (http_port + 10 when not set): VDO.Ninja cam links on another PC.
+    "https_port": None,
     "allow_network": False,
     # Rocket League's Stats API: read the game on this PC (GFX), at this address.
     "stats_api": {"read": False, "host": "127.0.0.1", "port": 49123},
@@ -45,6 +47,13 @@ DEFAULTS = {
     "sponsors": [],
     "sponsor_seconds": 8,
     "show": {"players": True, "sponsors": True, "target": True, "boost": True, "events": True},
+    # Player cams: SCC Player Cam (Rocket League, by in-game name), or a link
+    # (VDO.Ninja) typed beside a player's in-game name, which wins; "hidden":
+    # in-game names whose cam isn't shown.
+    "cams": {"on": True, "links": [], "hidden": []},
+    # The overlay made in the GFX Engine (Composer > Add to a HUD): shown at
+    # /overlay when it's here and "use" is on (/overlay-classic is the built-in one).
+    "look": {"use": True},
     # The SCC GFX Engine this HUD sends its game and series to (see rlhud/enginelink.py).
     "gfx_engine": {"url": "", "name": "", "connected": False},
 }
