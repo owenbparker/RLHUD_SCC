@@ -9,3 +9,8 @@ overlay-test*
 _update/
 build/
 dist/
+certs/
+look/
+look.new/
+look.old/
+look.json
