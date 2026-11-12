@@ -14,7 +14,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import look, statsapi
+from . import appearance, look, statsapi
 from .cams import CamHub, cam_links
 from .config import DATA_DIR, LOGO_DIR, SPONSOR_DIR, WEB_DIR, web_file
 from .demo import DemoMatch
@@ -539,6 +539,8 @@ def make_handler(app):
         def do_GET(self):
             url = urlparse(self.path)
             path = url.path
+            if appearance.handle(self, "GET", path, DATA_DIR):
+                return
             # The overlay: the graphic from the GFX Engine when there is one (and it's on).
             if path == "/overlay" and look.current(DATA_DIR) and (app.config.get().get("look") or {}).get("use", True):
                 try:
@@ -583,6 +585,8 @@ def make_handler(app):
 
         def do_POST(self):
             path = urlparse(self.path).path
+            if appearance.handle(self, "POST", path, DATA_DIR):
+                return
             local = _is_local(self.client_address[0])
             if path in CAM_PATHS:
                 # Player cams, from any PC on the network (when it's let in).
