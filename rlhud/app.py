@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from . import appearance, look, statsapi
 from .cams import CamHub, cam_links
 from .config import DATA_DIR, LOGO_DIR, SPONSOR_DIR, WEB_DIR, web_file
+from hudbuilder import embed as hud_builder
 from .demo import DemoMatch
 from .enginelink import EngineLink, save_logo_bytes, save_sponsors
 from .game import GameState
@@ -38,6 +39,7 @@ class HudApp:
         self.state = GameState()
         self.updater = Updater()
         self.server = None
+        self.builder = None         # Custom design: HUD Builder, built in (hudbuilder/embed.py)
         self.role = None          # "gfx", "observer" or None (the start screen)
         self.overlay_window = None
         self.demo = None
@@ -397,7 +399,26 @@ class HudApp:
         with self._cond:
             self._cond.notify_all()
 
+    def _builder_snapshot(self):
+        """What Custom design reads: what the GFX Engine gets, with the teams' logos."""
+        snap = self._engine_snapshot()
+        cfg = self.config.get()
+        series = snap.get("series") or {}
+        for side in ("left", "right"):
+            team = cfg.get(side) if isinstance(cfg.get(side), dict) else (cfg.get("match") or {}).get(side) or {}
+            # (the HUD's own team when the snapshot leaves the series out, e.g. while it follows the GFX Engine)
+            own = {"name": team.get("name") or "", "short": team.get("tricode") or team.get("short") or "",
+                   "score": team.get("wins") or 0, "color": team.get("color") or "", "logo": team.get("logo") or ""}
+            series[side] = dict(own, **{k: v for k, v in (series.get(side) or {}).items() if v not in (None, "")})
+        series.setdefault("best_of", (cfg.get("match") or {}).get("best_of") or cfg.get("best_of") or 3)
+        snap["series"] = series
+        snap.setdefault("event", cfg.get("event") or "")
+        snap.setdefault("stage", cfg.get("stage") or "")
+        return snap
+
     def stop(self):
+        if self.builder:
+            self.builder.stop()
         self._stop.set()
         self.stats.stop()
         self.engine.stop()
@@ -608,6 +629,12 @@ def make_handler(app):
                 if path == "/api/ingest":
                     app.ingest(body.get("messages") or [])
                     return self._json({"ok": True})
+                if path == "/api/custom-design":
+                    # Custom design: HUD Builder, built in (hudbuilder/embed.py).
+                    try:
+                        return self._send(json.dumps({"url": hud_builder.open_window(app.builder, "Custom design · Rocket League HUD")}))
+                    except ValueError as e:
+                        return self._send(json.dumps({"error": str(e)}), status=400)
                 if path.startswith("/api/engine/"):
                     # Connect to GFX Engine (see enginelink.py).
                     reply = app.engine.handle("POST", path, body)
@@ -758,6 +785,9 @@ def start(app):
     threading.Thread(target=app._send_loop, daemon=True).start()
     clean_up_old_update()
     app.updater.check_in_background()
+    # Custom design: design your own HUD (or bring in a .psd / .fig / .sccgfx) on this HUD's data.
+    app.builder = hud_builder.start("rl", "Rocket League HUD", app._builder_snapshot, DATA_DIR,
+                                    host_url=lambda: f"http://127.0.0.1:{port}")
     log(f"Rocket League HUD {app.updater.current} running - control panel http://localhost:{port}/control")
     log(f"Overlay (browser source, 1920x1080): http://localhost:{port}/overlay")
     return app.server

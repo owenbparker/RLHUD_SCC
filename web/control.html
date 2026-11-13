@@ -156,6 +156,7 @@
     <select id="ow-screen" title="Which screen the HUD covers" style="width:auto;border:0;border-left:1px solid var(--line);border-radius:0"></select>
   </div>
   <div class="status" style="margin-left:auto">
+    <button id="custom-design" title="Design your own HUD on this HUD's live data, or bring in a Photoshop, Figma or GFX Engine design (HUD Builder, built in)">Custom design</button>
     <button id="update" class="update" hidden></button>
     <span class="version" id="version"></span>
     <a href="/start" style="color:var(--muted);text-decoration:none;font-size:13px">Change client</a>
@@ -591,6 +592,14 @@ poll(); pollLog(); fitPreview();
   setInterval(refresh, 4000);
   refresh();
 })();
+</script>
+<script>
+// Custom design: HUD Builder, built in, in its own window.
+document.getElementById("custom-design").addEventListener("click", async () => {
+  const r = await fetch("/api/custom-design", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  const d = await r.json().catch(() => ({}));
+  if (d.error) alert(d.error);
+});
 </script>
 </body>
 </html>

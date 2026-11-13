@@ -3,3 +3,7 @@ pywebview
 pillow
 # The https certificate (VDO.Ninja cam links on another PC).
 cryptography
+# Custom design (HUD Builder): Photoshop files
+psd-tools
+# Custom design (HUD Builder): Figma files
+zstandard
