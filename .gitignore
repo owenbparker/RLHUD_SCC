@@ -15,5 +15,6 @@ look.new/
 look.old/
 look.json
 appearance.json
+start.json
 # Custom design's HUDs and settings (hudbuilder/embed.py)
 hud-builder/
